@@ -10,6 +10,8 @@ The main source has been the Coursera Specialization [Building AI Agents and Age
 
 Additionally, I have also taken notes from the Udemy course [Complete N8N and AI Automation Masterclass](https://www.udemy.com/course/complete-n8n/).
 
+Each course/module has its own subdirectory in this repository, where I have organized the notes and code examples.
+
 ## Setup
 
 Each subdirectory may contain its own setup instructions. If you need a generic Python environment, you can use the following recipe to based on [conda](https://docs.conda.io/en/latest/) and [pip-tools](https://github.com/jazzband/pip-tools):
