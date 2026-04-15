@@ -8,7 +8,10 @@ The main source has been the Coursera Specialization [Building AI Agents and Age
 - [Agentic AI with LangChain and LangGraph](https://www.coursera.org/programs/deutsche-telekom-learning-program-ddjuh/learn/agentic-ai-with-langchain-and-langgraph)
 - [Agentic AI with LangGraph, CrewAI, AutoGen and BeeAI](https://www.coursera.org/programs/deutsche-telekom-learning-program-ddjuh/learn/agentic-ai-with-langgraph-crewai-autogen-and-beeai)
 
-Additionally, I have also taken notes from the Udemy course [Complete N8N and AI Automation Masterclass](https://www.udemy.com/course/complete-n8n/).
+Additionally, I have also taken notes from other courses/tutorials:
+
+- [Complete N8N and AI Automation Masterclass](https://www.udemy.com/course/complete-n8n/)
+- [AI Engineer Agentic Track: The Complete Agent & MCP Course](https://www.udemy.com/course/the-complete-agentic-ai-engineering-course/)
 
 Each course/module has its own subdirectory in this repository, where I have organized the notes and code examples.
 
