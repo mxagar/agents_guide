@@ -26,6 +26,10 @@ Table of contents:
         - [Deployment Best Practices](#deployment-best-practices)
         - [Key Takeaways](#key-takeaways)
     - [Getting Started with Tool Calling](#getting-started-with-tool-calling)
+      - [Tool Calling for LLMs](#tool-calling-for-llms)
+      - [Why LLMs Need Tools](#why-llms-need-tools)
+      - [Tools, Agents, and Function Calling in LangChain](#tools-agents-and-function-calling-in-langchain)
+    - [Building and Orchestrating Tools](#building-and-orchestrating-tools)
   - [2. LCEL and Manual Tool Calling in LangChain](#2-lcel-and-manual-tool-calling-in-langchain)
   - [3. Using Built-In Agents in LangChain](#3-using-built-in-agents-in-langchain)
 
@@ -170,6 +174,82 @@ Tools/Software:
 
 ### Getting Started with Tool Calling
 
+#### Tool Calling for LLMs
+
+* Tool calling connects an LLM to external tools like APIs, databases, or code to access real-time data.
+* A client sends user messages and tool definitions, and the LLM decides which tool to use.
+* The client executes the tool and returns the result, and the LLM produces the final answer or another tool call.
+* Tool definitions include name, description, and input parameters, and can represent APIs, databases, or code.
+* Traditional tool calling can fail due to hallucinations or incorrect tool calls.
+* Embedded tool calling uses a library between the client and LLM to manage tools and execution.
+* The library sends messages with tools, executes tool calls, retries if needed, and returns final answers.
+* This reduces errors and simplifies the system by centralizing tool handling. 
+
+#### Why LLMs Need Tools
+
+* LLMs are strong at text generation but cannot access real-time data, perform reliable calculations, or interact with external systems, so they often "guess."
+* Tools extend LLM capabilities by enabling actions like math computation, API calls, data retrieval, and interaction with software.
+* Without tools, LLMs rely only on training data patterns, which leads to hallucinations and errors, especially in tasks like math or logic.
+* Tools improve accuracy and reliability by allowing the model to execute precise operations instead of guessing.
+* Tools enable retrieval-augmented generation (RAG), letting LLMs access external data such as company documents or databases.
+* They also support multimodal processing, including images, audio, and other non-text inputs.
+* Tools help overcome limitations like lack of memory across sessions and restricted context window size.
+* They allow LLMs to interact with APIs, databases, and digital services to perform real-world tasks.
+* Examples include calculators for exact math, web tools for real-time information, code execution tools, and SQL queries.
+* With tools, LLMs evolve into agents that follow a loop: understand the request, choose a tool, execute it, and return a result.
+* Tools transform LLMs from passive text generators into active systems capable of solving real-world problems.
+
+#### Tools, Agents, and Function Calling in LangChain
+
+* Tools are functions (APIs, code, databases) that extend LLM capabilities.
+* Tool calling means the LLM generates a structured request (not execution).
+* An external system executes the tool and returns results for the final answer.
+* Function calling and tool calling are the same concept (different naming).
+
+Tool structure:
+
+| Component   | Purpose         |
+| ----------- | --------------- |
+| Name        | Identifier      |
+| Description | When/how to use |
+| Parameters  | Inputs          |
+
+Workflow:
+
+* User query --> LLM selects tool.
+* LLM outputs structured call (e.g., JSON).
+* System executes tool.
+* Result --> LLM --> final answer.
+
+Tools in LangChain:
+
+* Built-in (Wikipedia, search, math).
+* Custom (`@tool`, `Tool`).
+* Toolkits = grouped tools.
+* Can be bound to OpenAI function calling.
+
+Agents vs tools:
+
+| Tools             | Agents                   |
+| ----------------- | ------------------------ |
+| Execute functions | Decide + orchestrate     |
+| No reasoning      | Use LLM + tools + memory |
+
+Agent architecture:
+
+* LLM: decides actions.
+* Tools: external capabilities.
+* Memory: context (RAM, SQL, vector DB).
+* Actions: structured tool calls.
+* External world: APIs, OS, etc.
+
+Agent flow: 
+
+* Query --> decide tool --> call tool --> get result --> respond.
+
+![Architecture of an AI agent in LangChain](./assets/Architecture-of-an-AI-agent-in-LangChain.png)
+
+### Building and Orchestrating Tools
 
 ## 2. LCEL and Manual Tool Calling in LangChain
 
