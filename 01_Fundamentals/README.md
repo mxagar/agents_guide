@@ -30,6 +30,8 @@ Table of contents:
       - [Why LLMs Need Tools](#why-llms-need-tools)
       - [Tools, Agents, and Function Calling in LangChain](#tools-agents-and-function-calling-in-langchain)
     - [Building and Orchestrating Tools](#building-and-orchestrating-tools)
+      - [Build Effective AI Tools for Advanced LLMs](#build-effective-ai-tools-for-advanced-llms)
+      - [Build Intelligent Agents for Dynamic LLM Tool Use](#build-intelligent-agents-for-dynamic-llm-tool-use)
   - [2. LCEL and Manual Tool Calling in LangChain](#2-lcel-and-manual-tool-calling-in-langchain)
   - [3. Using Built-In Agents in LangChain](#3-using-built-in-agents-in-langchain)
 
@@ -250,6 +252,284 @@ Agent flow:
 ![Architecture of an AI agent in LangChain](./assets/Architecture-of-an-AI-agent-in-LangChain.png)
 
 ### Building and Orchestrating Tools
+
+#### Build Effective AI Tools for Advanced LLMs
+
+![Agents vs LLMs](./assets/agents_vs_llms.png)
+
+* An agent extends an LLM by using tools to act, access data, and perform multi-step reasoning; tools are the mechanism that enables real-world interaction.
+* Tool calling workflow: the LLM selects a tool, extracts parameters from the user query, calls the tool with structured inputs, and returns the result.
+* A tool is a Python function with a clear purpose, well-defined inputs (string or JSON), a descriptive name, a docstring (critical for tool selection), and a consistent output format (usually a dictionary).
+* Simple tools use unstructured string inputs and basic parsing; they are fragile and limited.
+* Structured tools define typed inputs (e.g., lists, booleans), support multiple parameters, and integrate better with function-calling LLMs.
+* Inputs must be JSON-serializable; outputs should be simple and predictable because some LLMs struggle with complex formats.
+* Tools can return flexible outputs using typing (e.g., Union), but this increases parsing complexity.
+* Not all LLMs support multi-argument tools reliably; testing and version control are important due to LangChain instability.
+
+```python
+# Simple tool (fragile)
+def add_numbers(inputs: str) -> dict:
+    """
+    Adds all integer numbers found in a string.
+
+    Parameters:
+    - inputs (str): A string containing numbers separated by spaces or text.
+
+    Returns:
+    - dict: A dictionary with key 'result' containing the sum of extracted integers.
+
+    Example:
+    >>> add_numbers("10 20 30")
+    {'result': 60}
+    """
+    digits = [int(x) for x in inputs.split() if x.isdigit()]
+    return {"result": sum(digits)}  # We return a dictionary
+
+# LangChain Tool wrapper
+from langchain.tools import Tool
+
+add_tool = Tool(
+    name="add_numbers",
+    func=add_numbers,
+    description="Adds numbers from a string input"  # complements docstring
+)
+
+result = add_tool.invoke("10 20 30")  # {'result': 60}
+
+# Accessing metadata
+print(add_tool.name)  # "add_numbers"
+print(add_tool.description)  # "Adds numbers from a string input"
+print(getattr(add_tool, "args", None))  # Depends on version
+
+
+# Tool decorator: same as Tool, but cleaner syntax
+from langchain.tools import tool
+import re
+
+@tool
+def add_numbers(inputs: str) -> dict:
+    """
+    Extracts and sums all integers from a string using regex.
+
+    Parameters:
+    - inputs (str): A string possibly containing numbers.
+
+    Returns:
+    - dict: A dictionary with key 'result' containing the sum.
+
+    Example:
+    >>> add_numbers("The numbers are 10 and 20")
+    {'result': 30}
+    """
+    numbers = [int(x) for x in re.findall(r"\d+", inputs)]
+    return {"result": sum(numbers)}
+
+
+# Structured tool with multiple typed inputs and detailed docstring
+# Better!
+from typing import List
+from langchain.tools import tool
+
+@tool
+def add_numbers_with_options(numbers: List[float], absolute: bool = False) -> float:
+    """
+    Sums a list of numbers, optionally using absolute values.
+
+    Parameters:
+    - numbers (List[float]): List of numbers to sum.
+    - absolute (bool): If True, sums absolute values of the numbers.
+
+    Returns:
+    - float: The computed sum.
+
+    Examples:
+    >>> add_numbers_with_options([1.0, -2.0], absolute=False)
+    -1.0
+    >>> add_numbers_with_options([1.0, -2.0], absolute=True)
+    3.0
+    """
+    if absolute:
+        numbers = [abs(x) for x in numbers]
+    return sum(numbers)
+
+# Invocation: We pass a dictionary matching the parameter names
+result = add_numbers_with_options.invoke({
+    "numbers": [-1.2, -5.0],
+    "absolute": True
+})  # 6.2
+
+# Accessing metadata (structured)
+print(add_numbers_with_options.name)  # "add_numbers_with_options"
+print(add_numbers_with_options.description)  # extracted from docstring
+# args is a JSON-like schema
+print(add_numbers_with_options.args)
+# Full tool schema (often available)
+print(getattr(add_numbers_with_options, "args_schema", None))  # Pydantic model if present
+
+
+# Tool with flexible output
+from typing import Dict, Union
+
+def safe_add(inputs: str) -> Dict[str, Union[float, str]]:
+    """
+    Attempts to sum integers in a string; returns an error message if none are found.
+
+    Parameters:
+    - inputs (str): Input string containing numbers.
+
+    Returns:
+    - Dict[str, Union[float, str]]:
+        - 'result' (float): Sum if numbers are found.
+        - 'result' (str): Error message if no numbers are found.
+
+    Example:
+    >>> safe_add("no numbers here")
+    {'result': 'No numbers found'}
+    """
+    numbers = [int(x) for x in inputs.split() if x.isdigit()]
+    if not numbers:
+        return {"result": "No numbers found"}
+    return {"result": sum(numbers)}
+
+```
+
+#### Build Intelligent Agents for Dynamic LLM Tool Use
+
+* An agent combines an LLM with tools to reason, decide, and act; it follows a loop: receive query, reason, call tools, observe results, iterate, and produce an answer.
+* Key design factors:
+    * LLM choice determines tool-use and reasoning capabilities.
+    * Tools must use JSON-serializable inputs/outputs; structured tools are preferred.
+    * Agent strategy matters: simple agents vs ReAct (multi-step reasoning + tool use).
+* ReAct pattern: think --> act (call tool) --> observe --> plan next step --> repeat or answer; zero-shot ReAct solves tasks without examples using step-by-step reasoning.
+* Agent initialization in LangChain uses `initialize_agent` to bind LLM + tools + strategy.
+* Agent types depend on tool format; `agent` parameter specifies the reasoning strategy and tool handling:
+    1. `zero-shot-react-description` --> expects string inputs/outputs.
+    2. `structured-chat-zero-shot-react-description` --> supports typed inputs (`StructuredTools`).
+    3. `openai-functions` --> supports structured outputs (JSON/dicts).
+* `invoke` is preferred over `run` for debugging and structured I/O; `verbose=True` exposes reasoning; `handle_parsing_errors=True` improves robustness.
+* Different LLM-agent-tool combinations behave differently; structured outputs may break weaker combinations and require compatible agents.
+
+![How Agents Work](./assets/how_agents_work.png)
+
+![ReAct Agent](./assets/react_agent.png)
+
+![Agent Input/Output](./assets/agent_input_output.png)
+
+```python
+# Initialize an LLM (example with IBM Granite via langchain_ibm)
+from langchain_ibm import ChatWatsonx
+
+llm = ChatWatsonx(
+    model_id="ibm/granite-3-2-8b-instruct",
+    url="https://xxx.ml.cloud.ibm.com",  # placeholder
+    project_id="your_project_id",
+    apikey="YOUR_API_KEY"
+)
+
+# Basic usage
+response = llm.invoke("What is 2 + 2?")
+
+# 1. Zero-shot ReAct agent (string tools)
+# First, we define simple tool + tool wrapper (string-based, for zero-shot-react-description)
+from langchain.tools import Tool
+
+def add_numbers(inputs: str) -> str:
+    """
+    Adds numbers from a string input.
+    Parameters:
+    - inputs (str): Numbers in text form.
+    Returns:
+    - str: Sum as string (important for this agent type).
+    """
+    digits = [int(x) for x in inputs.split() if x.isdigit()]
+    return str(sum(digits))  # must return string for this agent
+
+add_tool = Tool(
+    name="add_numbers",
+    func=add_numbers,
+    description="Adds numbers from a string"
+)
+
+
+# Zero-shot ReAct agent (string tools)
+from langchain.agents import initialize_agent
+
+agent = initialize_agent(
+    tools=[add_tool],  # We pass a list of tools
+    llm=llm,  # The LLM that powers the agent's reasoning
+    agent="zero-shot-react-description",
+    verbose=True,  # prints reasoning steps
+    handle_parsing_errors=True  # recovers from malformed outputs
+)
+
+# Run query (internally: think -> act -> observe loop)
+result = agent.invoke(
+    "What is the sum of 27.72, 2.14, and 1.79?"
+)
+
+print(result)
+
+
+# 2. Structured tool (typed inputs) for structured-chat agent
+from langchain.tools import tool
+from typing import List
+
+@tool
+def add_numbers_with_options(numbers: List[float], absolute: bool = False) -> float:
+    """
+    Sums a list of numbers, optionally using absolute values.
+    Parameters:
+    - numbers (List[float]): List of numbers.
+    - absolute (bool): Whether to use absolute values.
+    Returns:
+    - float: Sum result.
+    """
+    if absolute:
+        numbers = [abs(x) for x in numbers]
+    return sum(numbers)
+
+# Structured ReAct agent (supports typed inputs)
+structured_agent = initialize_agent(
+    tools=[add_numbers_with_options],
+    llm=llm,
+    agent="structured-chat-zero-shot-react-description",
+    verbose=True
+)
+
+# Structured invocation (input/output wrapped in dict)
+result = structured_agent.invoke({
+    "input": "Sum -1.2 and -5.0 using absolute values"
+})
+
+print(result["output"])
+
+
+# 3. Agent supporting structured outputs (e.g., OpenAI functions)
+from langchain_openai import ChatOpenAI
+
+# OpenAI function calling agent (supports structured outputs, i.e., dict/JSON)
+llm_openai = ChatOpenAI(model="gpt-4.1-nano")
+
+agent_functions = initialize_agent(
+    tools=[add_numbers_with_options],
+    llm=llm_openai,
+    agent="openai-functions",  # supports JSON/dict outputs
+    verbose=True
+)
+
+result = agent_functions.invoke({
+    "input": "Sum -1.2 and -5.0 using absolute values"
+})
+
+print(result)
+
+# Notes:
+# - zero-shot-react-description: string I/O tools only
+# - structured-chat-zero-shot-react-description: supports typed inputs
+# - openai-functions: supports structured outputs (dict/JSON)
+# - invoke(): preferred for structured debugging
+# - verbose=True: shows internal reasoning loop (ReAct trace)
+```
 
 ## 2. LCEL and Manual Tool Calling in LangChain
 
