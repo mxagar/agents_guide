@@ -10,8 +10,11 @@ jupyter
 jupyterlab
 langchain
 langchain-anthropic
+langchain-ibm
 langchain-openai
+langchain-community
 langgraph
+langfuse
 langsmith
 matplotlib
 mcp
@@ -35,4 +38,5 @@ torchtext
 tqdm
 transformers[torch]
 umap-learn
+wikipedia
 wordcloud

@@ -32,6 +32,24 @@ Table of contents:
     - [Building and Orchestrating Tools](#building-and-orchestrating-tools)
       - [Build Effective AI Tools for Advanced LLMs](#build-effective-ai-tools-for-advanced-llms)
       - [Build Intelligent Agents for Dynamic LLM Tool Use](#build-intelligent-agents-for-dynamic-llm-tool-use)
+      - [Exercises: Tool Calling](#exercises-tool-calling)
+      - [Popular Built-in Tools in LangChain](#popular-built-in-tools-in-langchain)
+        - [Search tools](#search-tools)
+        - [Code interpretation and data analysis](#code-interpretation-and-data-analysis)
+        - [Web browsing and interaction](#web-browsing-and-interaction)
+        - [Productivity and collaboration](#productivity-and-collaboration)
+        - [File and document processing](#file-and-document-processing)
+        - [Financial and business tools](#financial-and-business-tools)
+        - [AI and machine learning integration](#ai-and-machine-learning-integration)
+      - [Summary](#summary)
+        - [1. Tool calling fundamentals](#1-tool-calling-fundamentals)
+        - [2. Tool calling workflow](#2-tool-calling-workflow)
+        - [3. Tool creation methods (LangChain)](#3-tool-creation-methods-langchain)
+        - [4. Inspecting and using tools](#4-inspecting-and-using-tools)
+        - [5. Built-in tools (by use case)](#5-built-in-tools-by-use-case)
+        - [6. Agents (LangChain)](#6-agents-langchain)
+        - [7. LCEL (LangChain Expression Language)](#7-lcel-langchain-expression-language)
+        - [Key takeaways](#key-takeaways-1)
   - [2. LCEL and Manual Tool Calling in LangChain](#2-lcel-and-manual-tool-calling-in-langchain)
   - [3. Using Built-In Agents in LangChain](#3-using-built-in-agents-in-langchain)
 
@@ -426,6 +444,10 @@ llm = ChatWatsonx(
     apikey="YOUR_API_KEY"
 )
 
+# Alternative LLM:
+# from langchain_openai import ChatOpenAI
+# llm = ChatOpenAI(model="gpt-4.1-nano")
+
 # Basic usage
 response = llm.invoke("What is 2 + 2?")
 
@@ -530,6 +552,266 @@ print(result)
 # - invoke(): preferred for structured debugging
 # - verbose=True: shows internal reasoning loop (ReAct trace)
 ```
+
+#### Exercises: Tool Calling
+
+Notebooks and contents:
+
+- [`01_tools.ipynb`](./lab/01_tools.ipynb): automatically generated notebook which covers the basics of tool calling in LangChain.
+  - Introduces the notebook as a runnable companion to the README section on building and orchestrating tools.
+  - Loads `dotenv`, LangChain tool utilities, and basic Python typing/helpers.
+  - Demonstrates a simple string-based addition function wrapped as a LangChain tool.
+  - Shows the `@tool` decorator approach with a regex-based addition tool.
+  - Builds a structured tool with typed inputs and an `absolute` flag.
+  - Inspects tool metadata such as `name`, `description`, `args`, and `args_schema`.
+  - Includes a `safe_add` example with flexible output for success and error cases.
+  - Uses OpenAI models only for the agent section.
+  - Creates agents with the current `create_agent(...)` API for string tools and structured tools.
+  - Adds a structured final-output example using a Pydantic schema.
+  - Ends with takeaways comparing fragile string tools, structured tools, and modern agent orchestration.
+- [`02_AI-Math-Assistant-Tool-Calling.ipynb`](./lab/02_AI-Math-Assistant-Tool-Calling.ipynb): lab exercise from the course, where tool calling is covered.
+  - Starts as a guided lab on building an AI math assistant with LangChain tool calling.
+  - Covers setup, required libraries, and environment preparation.
+  - Introduces IBM `ChatWatsonx` as the main model in the original lab, with notes for local OpenAI and IBM configuration.
+  - Explains the difference between plain functions and LangChain tools.
+  - Builds and tests a basic `add_numbers` function.
+  - Wraps functions with both the `Tool` class and the `@tool` decorator.
+  - Demonstrates structured tools with multiple inputs using `add_numbers_with_options`.
+  - Explores typed and flexible tool return values, including complex dictionary outputs.
+  - Introduces classic agent setup with `initialize_agent(...)`.
+  - Demonstrates multiple agent styles, including `zero-shot-react-description`, `structured-chat-zero-shot-react-description`, and `openai-functions`.
+  - Introduces `create_react_agent` from LangGraph as a newer alternative.
+  - Builds a multi-tool math toolkit with addition, subtraction, multiplication, and division.
+  - Tests the math agent, diagnoses a subtraction mismatch, and fixes the tool behavior.
+  - Rebuilds the agent and runs automated test cases across multiple prompts.
+  - Discusses stronger validation and error handling for the math tools.
+  - Adds a built-in/community Wikipedia tool and combines factual lookup with math reasoning.
+  - Ends with an exercise to build, wrap, and test a power/exponentiation tool.
+
+In the second notebook [`02_AI-Math-Assistant-Tool-Calling.ipynb`](./lab/02_AI-Math-Assistant-Tool-Calling.ipynb)
+
+- `create_react_agent(...)` is used to build a graph-based loop where the model can reason, pick a tool, observe the result, and keep going until it has enough information. That makes it especially useful for multi-step tasks, multi-tool orchestration, and inspecting the full message/tool-call sequence. It is also closer to the LangGraph-style direction the ecosystem is moving toward, so it is better suited for more agentic workflows than a simple one-shot tool demo.
+- `WikipediaAPIWrapper` is used, which allows the agent to fetch information from Wikipedia. This means the agent is no longer limited to computation from user-provided numbers. It can fetch outside factual context first, then use your math tools on top of that result. That is the big practical advantage: the agent can combine retrieval plus computation in one flow, which is much closer to real-world agent behavior.
+
+#### Popular Built-in Tools in LangChain
+
+##### Search tools
+
+| Tool/Toolkit  | Function              | Purpose                                                                |
+| ------------- | --------------------- | ---------------------------------------------------------------------- |
+| SerpAPI       | Web search            | Performs web searches and returns answers                              |
+| Google Search | Web search            | Executes Google searches and returns URLs, snippets, and titles        |
+| Tavily Search | AI-optimized search   | Designed for AI agents; returns URLs, content, titles, images, answers |
+| Wikipedia     | Knowledge base search | Searches Wikipedia and returns relevant summaries                      |
+
+
+##### Code interpretation and data analysis
+
+| Tool/Toolkit         | Function                 | Purpose                                                     |
+| -------------------- | ------------------------ | ----------------------------------------------------------- |
+| Python REPL          | Code execution           | Executes Python code for calculations, analysis, automation |
+| Pandas DataFrame     | Data manipulation        | Enables interaction with tabular data                       |
+| SQL Database Toolkit | Database querying        | Queries and manipulates SQL databases via natural language  |
+| LLMMathChain         | Mathematical computation | Solves math problems via Python execution                   |
+| JSON Toolkit         | JSON manipulation        | Handles large JSON/dictionary objects efficiently           |
+
+##### Web browsing and interaction
+
+| Tool/Toolkit       | Function                | Purpose                                      |
+| ------------------ | ----------------------- | -------------------------------------------- |
+| Requests Toolkit   | HTTP requests           | Sends HTTP requests and fetches web content  |
+| PlayWright Browser | Browser automation      | Automates browser navigation and interaction |
+| MultiOn Toolkit    | Web app interaction     | Enables interaction with web applications    |
+| ArXiv              | Scientific paper search | Retrieves scientific papers from arXiv       |
+
+##### Productivity and collaboration
+
+| Tool/Toolkit      | Function            | Purpose                                |
+| ----------------- | ------------------- | -------------------------------------- |
+| Gmail Toolkit     | Email management    | Reads, sends, and manages Gmail emails |
+| Office365 Toolkit | Office integration  | Interacts with Microsoft 365 apps      |
+| Slack Toolkit     | Team communication  | Sends and reads Slack messages         |
+| Github Toolkit    | Repo management     | Manages repositories, issues, PRs      |
+| Google Calendar   | Calendar management | Creates and manages calendar events    |
+
+##### File and document processing
+
+| Tool/Toolkit     | Function              | Purpose                                      |
+| ---------------- | --------------------- | -------------------------------------------- |
+| File System      | Local file operations | Reads, writes, and manages local files       |
+| Google Drive     | Cloud storage         | Accesses and manages files in Google Drive   |
+| VectorStoreQA    | Document querying     | Queries documents stored in vector databases |
+| Document Loaders | Content extraction    | Extracts content from formats like PDF, DOCX |
+
+##### Financial and business tools
+
+| Tool/Toolkit  | Function               | Purpose                                       |
+| ------------- | ---------------------- | --------------------------------------------- |
+| Yahoo Finance | Financial news         | Retrieves financial news and market data      |
+| GOAT          | Financial transactions | Handles payments, purchases, investments      |
+| Polygon IO    | Market data            | Provides real-time and historical market data |
+| Stripe        | Payment processing     | Manages payments and subscriptions            |
+
+##### AI and machine learning integration
+
+| Tool/Toolkit           | Function         | Purpose                                 |
+| ---------------------- | ---------------- | --------------------------------------- |
+| DALL·E Image Generator | Image creation   | Generates images from text              |
+| HuggingFace Hub Tools  | Model access     | Connects to ML models on HuggingFace    |
+| Google Imagen          | Image generation | Uses Google Vertex AI image generation  |
+| Nuclia Understanding   | Data indexing    | Indexes unstructured data for retrieval |
+
+#### Summary
+
+##### 1. Tool calling fundamentals
+
+* Tool calling lets an LLM decide which tool to use and generate arguments, but the application executes the tool.
+* The model does not execute code; it only proposes structured tool calls.
+
+##### 2. Tool calling workflow
+
+* Define tools + ask question.
+* LLM selects tool and generates arguments.
+* Application executes tool.
+* Tool returns structured output (dict/JSON).
+* Result is passed back to LLM.
+* LLM produces final natural language answer.
+
+```python
+# Example tool
+def get_weather(location: str) -> dict:
+    return {"temperature": 14}
+
+# Simulated flow
+query = "What's the weather in Paris?"
+tool_call = {"tool": "get_weather", "args": {"location": "paris"}}
+
+result = get_weather(**tool_call["args"])  # {"temperature": 14}
+
+final_answer = f"It's currently {result['temperature']}°C in Paris."
+```
+
+##### 3. Tool creation methods (LangChain)
+
+* BaseTool (subclassing)
+
+  * Maximum control, supports sync/async, custom logic.
+  * More boilerplate.
+
+* `Tool` class
+
+  * Wraps a function with metadata.
+  * Mostly single string input.
+  * Legacy compatibility.
+
+* `@tool` decorator (recommended)
+
+  * Infers name, description, args from signature + docstring.
+  * Creates StructuredTool automatically.
+
+* StructuredTool
+
+  * Supports multiple typed inputs and complex schemas.
+  * Best for modern function-calling LLMs.
+
+```python
+# @tool (recommended)
+from langchain.tools import tool
+from typing import List
+
+@tool
+def add_numbers(numbers: List[float]) -> float:
+    """Sum a list of numbers."""
+    return sum(numbers)
+```
+
+##### 4. Inspecting and using tools
+
+* Inspect schema (name, description, args)
+
+```python
+print(add_numbers.name)
+print(add_numbers.description)
+print(add_numbers.args)
+```
+
+* Direct invocation (useful for testing)
+
+```python
+add_numbers.invoke({"numbers": [1, 2, 3]})  # 6
+```
+
+* Bind tools to model
+
+```python
+llm_with_tools = llm.bind_tools([add_numbers])
+```
+
+* Model generates tool call (app executes it)
+
+```python
+response = llm_with_tools.invoke("Sum 1, 2, 3")
+# response contains tool call info (not execution)
+```
+
+##### 5. Built-in tools (by use case)
+
+* Search: SerpAPI, Wikipedia, Tavily → web/knowledge search
+* Math & Code: LLMMathChain, Python REPL, Pandas → computation, analysis
+* Web/API: Requests Toolkit, PlayWright → HTTP, scraping
+* Productivity: Gmail, Calendar, Slack, GitHub → communication, scheduling
+* Files/Docs: FileSystem, Google Drive, VectorStoreQA → file/document access
+* Finance: Stripe, Yahoo Finance, Polygon → payments, market data
+* ML: DALL·E, HuggingFace → model/image generation
+
+
+##### 6. Agents (LangChain)
+
+* Agent = LLM + Tools + Memory + Execution loop
+
+* Iteratively:
+
+  * reason → act (tool call) → observe → repeat → answer
+
+* Components:
+
+  * LLM: reasoning
+  * Tools: actions
+  * Memory: context
+  * Executor: loop controller
+
+* Common agent types:
+
+  * zero-shot-react-description
+  * chat-zero-shot-react-description
+  * create_openai_functions_agent
+  * LangGraph agents
+
+##### 7. LCEL (LangChain Expression Language)
+
+* Used to build chains (pipelines) using `|`
+* Based on Runnables (standard interface)
+* Enables composable, readable workflows
+
+```python
+# LCEL chain example
+from langchain_core.runnables import RunnableLambda
+
+chain = (
+    RunnableLambda(lambda x: x + 1)
+    | RunnableLambda(lambda x: x * 2)
+)
+
+chain.invoke(3)  # (3 + 1) * 2 = 8
+```
+
+##### Key takeaways
+
+* LLM decides tool usage; application executes it.
+* Structured tools are preferred for reliability and flexibility.
+* Agents implement iterative reasoning loops with tools.
+* LCEL enables clean chaining of components.
+* Always validate tool schemas and compatibility with chosen LLM/agent.
 
 ## 2. LCEL and Manual Tool Calling in LangChain
 
