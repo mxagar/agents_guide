@@ -55,14 +55,16 @@ Table of contents:
       - [LangChain Expression Language (LCEL) and Chaining](#langchain-expression-language-lcel-and-chaining)
       - [Exercise: AI-Powered Data Analysis with LCEL](#exercise-ai-powered-data-analysis-with-lcel)
       - [LCEL Cheat Sheet](#lcel-cheat-sheet)
-    - [What changed in v1](#what-changed-in-v1)
-    - [Why LCEL is useful](#why-lcel-is-useful)
-    - [Core Runnable types](#core-runnable-types)
-    - [Common LCEL operations](#common-lcel-operations)
-    - [Common LCEL patterns](#common-lcel-patterns)
-    - [Minimal example](#minimal-example)
-    - [When to use what](#when-to-use-what)
+        - [What changed in v1](#what-changed-in-v1)
+        - [Why LCEL is useful](#why-lcel-is-useful)
+        - [Core Runnable types](#core-runnable-types)
+        - [Common LCEL operations](#common-lcel-operations)
+        - [Common LCEL patterns](#common-lcel-patterns)
+        - [Minimal example](#minimal-example)
+        - [When to use what](#when-to-use-what)
     - [Manual Tooling Calling Basics](#manual-tooling-calling-basics)
+      - [When to Call Tools Manually](#when-to-call-tools-manually)
+      - [Structured Outputs for Tool Calling](#structured-outputs-for-tool-calling)
     - [Parsing and Validating Tool Calls](#parsing-and-validating-tool-calls)
     - [Summary](#summary-1)
   - [3. Using Built-In Agents in LangChain](#3-using-built-in-agents-in-langchain)
@@ -900,40 +902,156 @@ result = chain.invoke({"text": "LangChain is powerful"})
 
 Notebook: [`03_LLM-Powered Data Science-v1.ipynb`](./lab/03_LLM-Powered%20Data%20Science-v1.ipynb)
 
-- Installs and imports the core libraries needed for the lab, including `langchain`, `langchain-openai`, and the data science stack.
-- Sets up the OpenAI chat model used by the agent to reason about datasets and decide which tools to call.
-- Defines a set of LangChain tools for dataset work, including listing CSV files, preloading datasets, generating dataset summaries, calling dataframe methods, and evaluating datasets for classification or regression.
-- Shows how tool-based agents can use those tools to inspect data and choose the right analysis path instead of relying on hardcoded logic.
-- Builds a data science assistant that can look at dataset structure and decide whether a problem is better treated as classification or regression.
-- Demonstrates how the agent can invoke tools to gather context about the available datasets before answering higher-level questions.
-- Includes helper logic to evaluate datasets with ML workflows and report metrics appropriate to the task type.
-- Ends with a notebook-friendly `ask_datawizard(...)` helper so you can query the agent directly from notebook cells.
-- Also includes a commented `while` loop example for CLI/script usage, with a note that it should be run in a terminal rather than inside the notebook UI.
-- Updates the original LangChain agent code to align with the newer LangChain v1 interface:
-  - replaced older agent construction patterns with `create_agent(...)`
-  - switched invocation to the v1 `{"messages": [...]}` format
-  - removed the old `AgentExecutor` dependency for this flow
-  - added a helper to extract the final assistant text from the v1 response structure
+This exercise builds a small data-analysis assistant that can inspect CSV files, summarize their structure, and choose the right evaluation path for classification vs. regression. The notebook starts with plain LangChain tools and then wires them into a LangChain v1 agent.
+
+Key ideas:
+
+- Use tools to expose concrete dataset operations such as file discovery, caching, summarization, dataframe inspection, and ML evaluation.
+- Cache loaded dataframes in memory so the agent can work across multiple tool calls without reloading files every time.
+- Let the agent decide which tool to call next based on the dataset structure and the user's question.
+- Use the newer LangChain v1 interface: `create_agent(...)`, `system_prompt=...`, and `agent.invoke({"messages": [...]})`.
+- Keep notebook usage and CLI usage separate: a notebook helper function for interactive cells, plus a terminal-style `while` loop example for scripts.
+
+Core dataset tools:
+
+```python
+from langchain_core.tools import tool
+
+@tool
+def list_csv_files() -> Optional[List[str]]:
+    """List all CSV file names in the local directory."""
+    csv_files = glob.glob(os.path.join(os.getcwd(), "*.csv"))
+    if not csv_files:
+        return None
+    return [os.path.basename(file) for file in csv_files]
+
+DATAFRAME_CACHE = {}
+
+@tool
+def preload_datasets(paths: List[str]) -> str:
+    loaded = []
+    cached = []
+    for path in paths:
+        if path not in DATAFRAME_CACHE:
+            DATAFRAME_CACHE[path] = pd.read_csv(path)
+            loaded.append(path)
+        else:
+            cached.append(path)
+    return f"Loaded datasets: {loaded}\nAlready cached: {cached}"
+```
+
+The notebook then adds two especially useful analysis tools:
+
+- `get_dataset_summaries(...)` returns column names and dtypes for each CSV.
+- `call_dataframe_method(...)` lets the agent call simple dataframe methods such as `head()` or `describe()` on cached datasets.
+
+It also includes lightweight ML evaluation tools so the agent can move from inspection to actual scoring:
+
+```python
+@tool
+def evaluate_classification_dataset(file_name: str, target_column: str) -> Dict[str, float]:
+    X = df.drop(columns=[target_column])
+    y = df[target_column]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = RandomForestClassifier()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    return {"accuracy": accuracy_score(y_test, y_pred)}
+
+@tool
+def evaluate_regression_dataset(file_name: str, target_column: str) -> Dict[str, float]:
+    X = df.drop(columns=[target_column])
+    y = df[target_column]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = RandomForestRegressor()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    return {
+        "r2_score": r2_score(y_test, y_pred),
+        "mean_squared_error": mean_squared_error(y_test, y_pred),
+    }
+```
+
+The agent wiring is the part that was updated to align with the newer LangChain v1 interface:
+
+```python
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+
+llm = init_chat_model("gpt-4o-mini", model_provider="openai", streaming=False)
+
+system_prompt = (
+    "You are a data science assistant. Use the available tools to analyze CSV files. "
+    "Your job is to determine whether each dataset is for classification or regression, based on its structure."
+)
+
+tools = [
+    list_csv_files,
+    preload_datasets,
+    get_dataset_summaries,
+    call_dataframe_method,
+    evaluate_classification_dataset,
+    evaluate_regression_dataset,
+]
+
+agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt)
+```
+
+Instead of older `AgentExecutor`-style code, the notebook now uses the v1 message format directly:
+
+```python
+response = agent.invoke({
+    "messages": [
+        {"role": "user", "content": "Can you summarize the dataset?"}
+    ]
+})
+```
+
+For notebook usage, the cleanest entry point is a helper like this:
+
+```python
+def ask_datawizard(user_input: str):
+    result = agent.invoke({
+        "messages": [
+            {"role": "user", "content": user_input}
+        ]
+    })
+    answer = get_final_text(result)
+    print(f"my Agent: {answer}")
+    return result
+```
+
+And for terminal usage, the notebook keeps a CLI-style loop example at the end:
+
+```python
+# Run in a Python script or terminal, not inside the notebook UI.
+while True:
+    user_input = input(" You:")
+    if user_input.strip().lower() in ["exit", "quit"]:
+        print("see ya later")
+        break
+    ask_datawizard(user_input)
+```
 
 #### LCEL Cheat Sheet
 
 LangChain Expression Language (LCEL) is LangChain's compositional layer for building deterministic chains from reusable `Runnable` components. In LangChain v1, LCEL is still the right tool for prompt-model-parser pipelines, retrieval pipelines, and lightweight orchestration. For higher-level agent loops, the newer v1 interface centers on `create_agent(...)`, which is built on LangGraph.
 
-### What changed in v1
+##### What changed in v1
 
 - LCEL and `Runnable` concepts are still current and widely used.
 - Agent-building examples have shifted toward `create_agent(...)` and `{"messages": [...]}` inputs.
 - `AgentExecutor`-style examples are older patterns; for many common cases, v1 agents manage the tool loop for you.
 - A good rule of thumb is: use LCEL for predictable dataflows, use `create_agent(...)` for tool-calling agents, and use LangGraph when you need explicit state, branching, loops, or multi-agent workflows.
 
-### Why LCEL is useful
+##### Why LCEL is useful
 
 - It gives you a concise way to connect components with the `|` pipe operator.
 - It supports synchronous, async, batching, and streaming workflows through a shared interface.
 - It makes it easy to compose prompts, models, retrievers, parsers, and custom Python functions.
 - It works well for RAG pipelines and other structured transformations where the flow is mostly linear.
 
-### Core Runnable types
+##### Core Runnable types
 
 - `ChatModel`: calls an LLM or chat model.
 - `PromptTemplate` or `ChatPromptTemplate`: formats structured prompts from variables.
@@ -942,7 +1060,7 @@ LangChain Expression Language (LCEL) is LangChain's compositional layer for buil
 - `RunnableParallel`: runs multiple branches concurrently on the same input.
 - `RunnablePassthrough`: forwards input unchanged or augments dictionary-shaped state.
 
-### Common LCEL operations
+##### Common LCEL operations
 
 - `invoke()` / `ainvoke()`: run one input through a chain.
 - `batch()` / `abatch()`: process many inputs efficiently.
@@ -954,14 +1072,14 @@ LangChain Expression Language (LCEL) is LangChain's compositional layer for buil
 - `.with_config()`: attach reusable runtime configuration.
 - `astream_events()`: inspect detailed execution events.
 
-### Common LCEL patterns
+##### Common LCEL patterns
 
 - Simple QA: `prompt | model | StrOutputParser()`
 - RAG: `{"context": retriever | format_docs, "question": RunnablePassthrough()} | prompt | model | StrOutputParser()`
 - Structured output: `prompt | model | parser`
 - Parallel fan-out: `RunnableParallel(summary=chain_a, keywords=chain_b)`
 
-### Minimal example
+##### Minimal example
 
 ```python
 from langchain_core.output_parsers import StrOutputParser
@@ -980,15 +1098,151 @@ response = chain.invoke({"input": "Summarize LCEL in one sentence."})
 print(response)
 ```
 
-### When to use what
+##### When to use what
 
 - Use a direct model call when you just need one prompt and one response.
 - Use LCEL when you have a mostly linear pipeline of prompts, retrieval, parsing, and small transformations.
 - Use `create_agent(...)` in LangChain v1 when the model needs to decide which tools to call.
 - Use LangGraph when you need durable state, explicit branching, loops, interrupts, or multi-agent coordination.
 
-
 ### Manual Tooling Calling Basics
+
+#### When to Call Tools Manually
+
+* Automated agents follow: user prompt --> LLM selects tool + parameters --> agent executes --> result returned, with no manual validation.
+* This automation is efficient but risky, especially in sensitive domains (e.g., finance), where incorrect actions can cause serious consequences.
+* Manual tool invocation provides control by allowing developers to review tool selection, validate parameters, and verify outputs before execution.
+* Key advantages of manual invocation:
+  * Safety: prevents unintended or harmful actions.
+  * Cost control: avoids unnecessary or excessive API/tool calls.
+  * Accuracy: ensures correct tool usage and parameter selection.
+* Manual control enables input/output validation, alignment with intent, and selective execution of only safe and necessary operations.
+* Trade-off: automation increases speed and convenience, while manual invocation increases reliability, precision, and oversight.
+* Best practice: choose between automation and manual control depending on risk level, required accuracy, and system constraints.
+
+#### Structured Outputs for Tool Calling
+
+* Structured outputs enforce LLM responses to follow a predefined schema (instead of free text), enabling reliable use in databases, APIs, and programmatic workflows.
+* Benefits:
+  * Consistent data formats
+  * Easy programmatic processing
+  * Guaranteed presence of required fields
+  * Schema validation
+* Two-step process:
+  * Define schema (expected structure).
+  * Generate output conforming to that schema.
+* Schema definition options:
+  * JSON-like (dict/list): simple, lightweight.
+  * Pydantic models: preferred for type validation, field descriptions, and integration with LangChain.
+* Two methods to generate structured outputs:
+  * Tool calling:
+    * Bind schema as a tool.
+    * LLM returns arguments matching schema.
+    * Extract as dict and optionally parse to Pydantic.
+  * JSON mode:
+    * Supported by some models.
+    * Forces valid JSON output directly.
+    * Returns ready-to-use dictionary.
+* LangChain helper:
+  * with_structured_output():
+    * Binds schema as a tool.
+    * Forces model to use it.
+    * Parses output automatically into schema.
+* Use cases:
+  * Database storage
+  * API integration
+  * UI formatting
+  * Multi-step workflows
+  * Data extraction from text
+* Key idea: structured outputs turn LLMs from text generators into reliable data producers with enforceable formats.
+
+Practical examples:
+
+1. Extract entities from free text into a validated schema
+
+```python
+from pydantic import BaseModel, Field
+from langchain.chat_models import init_chat_model
+
+model = init_chat_model("gpt-4o-mini", model_provider="openai")
+
+class SupportTicket(BaseModel):
+    customer_name: str = Field(description="Customer full name")
+    issue_type: str = Field(description="Short category such as billing, login, or bug")
+    priority: str = Field(description="low, medium, or high")
+    summary: str = Field(description="One-sentence summary of the issue")
+
+structured_model = model.with_structured_output(SupportTicket)
+
+ticket = structured_model.invoke(
+    "Maria Gomez cannot log in after resetting her password. She needs access today."
+)
+
+print(ticket)
+```
+
+This is useful when you want to move directly from raw user language to a typed object you can store in a database or send to another service.
+
+2. Use a schema as a tool and inspect the generated arguments
+
+```python
+from pydantic import BaseModel, Field
+from langchain.chat_models import init_chat_model
+
+model = init_chat_model("gpt-4o-mini", model_provider="openai")
+
+class CreateCalendarEvent(BaseModel):
+    title: str = Field(description="Short title of the event")
+    date: str = Field(description="Date in YYYY-MM-DD format")
+    start_time: str = Field(description="Start time in HH:MM format")
+    attendees: list[str] = Field(description="List of attendee email addresses")
+
+llm_with_tools = model.bind_tools([CreateCalendarEvent])
+
+ai_msg = llm_with_tools.invoke(
+    "Set up a planning meeting called Q3 roadmap on 2026-05-03 at 14:00 with ana@acme.com and lee@acme.com"
+)
+
+print(ai_msg.tool_calls)
+# Example shape:
+# [{'name': 'CreateCalendarEvent',
+#   'args': {'title': 'Q3 roadmap', 'date': '2026-05-03', 'start_time': '14:00',
+#            'attendees': ['ana@acme.com', 'lee@acme.com']}}]
+```
+
+This is the manual tool-calling flavor: the model does not create the calendar event itself. It returns validated arguments, and your application decides whether and how to execute the action.
+
+3. Produce API-ready JSON-style output for a downstream workflow
+
+```python
+from typing import Literal
+from pydantic import BaseModel
+from langchain.chat_models import init_chat_model
+
+model = init_chat_model("gpt-4o-mini", model_provider="openai")
+
+class ReviewLabel(BaseModel):
+    sentiment: Literal["positive", "neutral", "negative"]
+    needs_followup: bool
+    short_summary: str
+
+structured_model = model.with_structured_output(ReviewLabel)
+
+result = structured_model.invoke(
+    "The delivery was late and the box was damaged, but support fixed it quickly."
+)
+
+payload = result.model_dump()
+print(payload)
+```
+
+This pattern is handy when the next step is programmatic, such as:
+
+- inserting a row into a database
+- sending a JSON payload to an API
+- routing a case in a workflow engine
+- rendering a predictable UI card
+
 
 ### Parsing and Validating Tool Calls
 
