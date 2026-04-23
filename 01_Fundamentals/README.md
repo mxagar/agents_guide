@@ -51,6 +51,20 @@ Table of contents:
         - [7. LCEL (LangChain Expression Language)](#7-lcel-langchain-expression-language)
         - [Key takeaways](#key-takeaways-1)
   - [2. LCEL and Manual Tool Calling in LangChain](#2-lcel-and-manual-tool-calling-in-langchain)
+    - [Introduction Chaining and LCEL Basics (LangChain Expression Language)](#introduction-chaining-and-lcel-basics-langchain-expression-language)
+      - [LangChain Expression Language (LCEL) and Chaining](#langchain-expression-language-lcel-and-chaining)
+      - [Exercise: AI-Powered Data Analysis with LCEL](#exercise-ai-powered-data-analysis-with-lcel)
+      - [LCEL Cheat Sheet](#lcel-cheat-sheet)
+    - [What changed in v1](#what-changed-in-v1)
+    - [Why LCEL is useful](#why-lcel-is-useful)
+    - [Core Runnable types](#core-runnable-types)
+    - [Common LCEL operations](#common-lcel-operations)
+    - [Common LCEL patterns](#common-lcel-patterns)
+    - [Minimal example](#minimal-example)
+    - [When to use what](#when-to-use-what)
+    - [Manual Tooling Calling Basics](#manual-tooling-calling-basics)
+    - [Parsing and Validating Tool Calls](#parsing-and-validating-tool-calls)
+    - [Summary](#summary-1)
   - [3. Using Built-In Agents in LangChain](#3-using-built-in-agents-in-langchain)
 
 ## 1. Foundations of Tool Calling and Chaining
@@ -756,13 +770,13 @@ response = llm_with_tools.invoke("Sum 1, 2, 3")
 
 ##### 5. Built-in tools (by use case)
 
-* Search: SerpAPI, Wikipedia, Tavily → web/knowledge search
-* Math & Code: LLMMathChain, Python REPL, Pandas → computation, analysis
-* Web/API: Requests Toolkit, PlayWright → HTTP, scraping
-* Productivity: Gmail, Calendar, Slack, GitHub → communication, scheduling
-* Files/Docs: FileSystem, Google Drive, VectorStoreQA → file/document access
-* Finance: Stripe, Yahoo Finance, Polygon → payments, market data
-* ML: DALL·E, HuggingFace → model/image generation
+* Search: SerpAPI, Wikipedia, Tavily --> web/knowledge search
+* Math & Code: LLMMathChain, Python REPL, Pandas --> computation, analysis
+* Web/API: Requests Toolkit, PlayWright --> HTTP, scraping
+* Productivity: Gmail, Calendar, Slack, GitHub --> communication, scheduling
+* Files/Docs: FileSystem, Google Drive, VectorStoreQA --> file/document access
+* Finance: Stripe, Yahoo Finance, Polygon --> payments, market data
+* ML: DALL·E, HuggingFace --> model/image generation
 
 
 ##### 6. Agents (LangChain)
@@ -771,7 +785,7 @@ response = llm_with_tools.invoke("Sum 1, 2, 3")
 
 * Iteratively:
 
-  * reason → act (tool call) → observe → repeat → answer
+  * reason --> act (tool call) --> observe --> repeat --> answer
 
 * Components:
 
@@ -815,7 +829,170 @@ chain.invoke(3)  # (3 + 1) * 2 = 8
 
 ## 2. LCEL and Manual Tool Calling in LangChain
 
+### Introduction Chaining and LCEL Basics (LangChain Expression Language)
 
+#### LangChain Expression Language (LCEL) and Chaining
+
+* [LangChain Expression Language (LCEL)](https://langchain-opentutorial.gitbook.io/langchain-opentutorial/01-basic/07-lcel-interface) is the modern LangChain pattern for composing workflows by chaining components with the **pipe** operator (`|`), improving readability, composability, and data flow clarity over legacy `LLMChain`.
+* It is built on runnables (standard interfaces for prompts, LLMs, tools, etc.), enabling consistent chaining and execution.
+  * Runnables can be chained in a pipe: `chain = Runnable1 | Runnable2 | Runnable3`
+* Basic workflow:
+  * Define a prompt template with variables.
+  * Instantiate the template.
+  * Connect components with the pipe operator.
+  * Invoke with input data.
+* Execution patterns:
+  * Sequential: output flows step-by-step (pipe `|` replaces `RunnableSequence`).
+  * Parallel: multiple components run on the same input (`dict` --> `RunnableParallel`).
+* Automatic type coercion, i.e., regular code functions can be used as runnables without manual wrapping, making it easy to integrate custom logic.
+  * Functions become `RunnableLambda`.
+  * Dictionaries become `RunnableParallel`.
+  * No manual wrapping required.
+* Data flow example: input --> prompt formatting --> LLM --> output parser.
+* Parallel use case: same input processed into multiple outputs (e.g., summary, translation, sentiment).
+* LCEL supports async execution, streaming, tracing, and reusable pipelines.
+* Best suited for simple to medium workflows; use LangGraph for complex orchestration, embedding LCEL inside nodes.
+
+![LCEL Runnables](./assets/lcel_runnables.png)
+
+```python
+from langchain.schema.runnable import RunnableLambda, RunnableParallel
+from langchain.output_parsers import StrOutputParser
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+
+llm = ChatOpenAI(model_name="gpt-4")
+
+## Sequential LCEL chain
+def format_prompt(inputs):
+    return f"Tell me a {inputs['adjective']} joke about {inputs['content']}"
+
+chain = (
+    RunnableLambda(format_prompt)  # function auto-converted
+    | llm
+    | StrOutputParser()
+)
+
+chain.invoke({"adjective": "funny", "content": "AI"})
+
+## Prompt template + pipe
+prompt = ChatPromptTemplate.from_template(
+    "Write a {adjective} story about {topic}"
+)
+chain = prompt | llm
+
+chain.invoke({"adjective": "short", "topic": "robots"})
+
+## Parallel execution (dict --> RunnableParallel) 
+parallel_chain = {
+  "summary": ChatPromptTemplate.from_template("Summarize: {text}") | llm,
+  "translation": ChatPromptTemplate.from_template("Translate to French: {text}") | llm,
+  "sentiment": ChatPromptTemplate.from_template("Analyze sentiment: {text}") | llm
+}
+
+chain = RunnableParallel(parallel_chain)
+
+result = chain.invoke({"text": "LangChain is powerful"})
+# returns dict with all outputs
+```
+
+#### Exercise: AI-Powered Data Analysis with LCEL
+
+Notebook: [`03_LLM-Powered Data Science-v1.ipynb`](./lab/03_LLM-Powered%20Data%20Science-v1.ipynb)
+
+- Installs and imports the core libraries needed for the lab, including `langchain`, `langchain-openai`, and the data science stack.
+- Sets up the OpenAI chat model used by the agent to reason about datasets and decide which tools to call.
+- Defines a set of LangChain tools for dataset work, including listing CSV files, preloading datasets, generating dataset summaries, calling dataframe methods, and evaluating datasets for classification or regression.
+- Shows how tool-based agents can use those tools to inspect data and choose the right analysis path instead of relying on hardcoded logic.
+- Builds a data science assistant that can look at dataset structure and decide whether a problem is better treated as classification or regression.
+- Demonstrates how the agent can invoke tools to gather context about the available datasets before answering higher-level questions.
+- Includes helper logic to evaluate datasets with ML workflows and report metrics appropriate to the task type.
+- Ends with a notebook-friendly `ask_datawizard(...)` helper so you can query the agent directly from notebook cells.
+- Also includes a commented `while` loop example for CLI/script usage, with a note that it should be run in a terminal rather than inside the notebook UI.
+- Updates the original LangChain agent code to align with the newer LangChain v1 interface:
+  - replaced older agent construction patterns with `create_agent(...)`
+  - switched invocation to the v1 `{"messages": [...]}` format
+  - removed the old `AgentExecutor` dependency for this flow
+  - added a helper to extract the final assistant text from the v1 response structure
+
+#### LCEL Cheat Sheet
+
+LangChain Expression Language (LCEL) is LangChain's compositional layer for building deterministic chains from reusable `Runnable` components. In LangChain v1, LCEL is still the right tool for prompt-model-parser pipelines, retrieval pipelines, and lightweight orchestration. For higher-level agent loops, the newer v1 interface centers on `create_agent(...)`, which is built on LangGraph.
+
+### What changed in v1
+
+- LCEL and `Runnable` concepts are still current and widely used.
+- Agent-building examples have shifted toward `create_agent(...)` and `{"messages": [...]}` inputs.
+- `AgentExecutor`-style examples are older patterns; for many common cases, v1 agents manage the tool loop for you.
+- A good rule of thumb is: use LCEL for predictable dataflows, use `create_agent(...)` for tool-calling agents, and use LangGraph when you need explicit state, branching, loops, or multi-agent workflows.
+
+### Why LCEL is useful
+
+- It gives you a concise way to connect components with the `|` pipe operator.
+- It supports synchronous, async, batching, and streaming workflows through a shared interface.
+- It makes it easy to compose prompts, models, retrievers, parsers, and custom Python functions.
+- It works well for RAG pipelines and other structured transformations where the flow is mostly linear.
+
+### Core Runnable types
+
+- `ChatModel`: calls an LLM or chat model.
+- `PromptTemplate` or `ChatPromptTemplate`: formats structured prompts from variables.
+- `OutputParser`: converts model output into plain text or structured data.
+- `RunnableLambda`: wraps custom Python logic as a runnable step.
+- `RunnableParallel`: runs multiple branches concurrently on the same input.
+- `RunnablePassthrough`: forwards input unchanged or augments dictionary-shaped state.
+
+### Common LCEL operations
+
+- `invoke()` / `ainvoke()`: run one input through a chain.
+- `batch()` / `abatch()`: process many inputs efficiently.
+- `stream()` / `astream()`: stream incremental output.
+- `|` or `.pipe()`: compose steps into a sequence.
+- `.bind()`: preset model or runnable arguments.
+- `.with_retry()`: retry transient failures automatically.
+- `.with_fallbacks()`: try backup runnables if the primary path fails.
+- `.with_config()`: attach reusable runtime configuration.
+- `astream_events()`: inspect detailed execution events.
+
+### Common LCEL patterns
+
+- Simple QA: `prompt | model | StrOutputParser()`
+- RAG: `{"context": retriever | format_docs, "question": RunnablePassthrough()} | prompt | model | StrOutputParser()`
+- Structured output: `prompt | model | parser`
+- Parallel fan-out: `RunnableParallel(summary=chain_a, keywords=chain_b)`
+
+### Minimal example
+
+```python
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful assistant."),
+    ("user", "{input}"),
+])
+
+model = ChatOpenAI(model="gpt-4o-mini")
+chain = prompt | model | StrOutputParser()
+
+response = chain.invoke({"input": "Summarize LCEL in one sentence."})
+print(response)
+```
+
+### When to use what
+
+- Use a direct model call when you just need one prompt and one response.
+- Use LCEL when you have a mostly linear pipeline of prompts, retrieval, parsing, and small transformations.
+- Use `create_agent(...)` in LangChain v1 when the model needs to decide which tools to call.
+- Use LangGraph when you need durable state, explicit branching, loops, interrupts, or multi-agent coordination.
+
+
+### Manual Tooling Calling Basics
+
+### Parsing and Validating Tool Calls
+
+### Summary
 
 ## 3. Using Built-In Agents in LangChain
 
