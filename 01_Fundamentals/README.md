@@ -41,15 +41,15 @@ Table of contents:
         - [File and document processing](#file-and-document-processing)
         - [Financial and business tools](#financial-and-business-tools)
         - [AI and machine learning integration](#ai-and-machine-learning-integration)
-      - [Summary](#summary)
-        - [1. Tool calling fundamentals](#1-tool-calling-fundamentals)
-        - [2. Tool calling workflow](#2-tool-calling-workflow)
-        - [3. Tool creation methods (LangChain)](#3-tool-creation-methods-langchain)
-        - [4. Inspecting and using tools](#4-inspecting-and-using-tools)
-        - [5. Built-in tools (by use case)](#5-built-in-tools-by-use-case)
-        - [6. Agents (LangChain)](#6-agents-langchain)
-        - [7. LCEL (LangChain Expression Language)](#7-lcel-langchain-expression-language)
-        - [Key takeaways](#key-takeaways-1)
+    - [Summary and Cheat Sheet: Tool Calling and Chaining](#summary-and-cheat-sheet-tool-calling-and-chaining)
+      - [1. Tool calling fundamentals](#1-tool-calling-fundamentals)
+      - [2. Tool calling workflow](#2-tool-calling-workflow)
+      - [3. Tool creation methods (LangChain)](#3-tool-creation-methods-langchain)
+      - [4. Inspecting and using tools](#4-inspecting-and-using-tools)
+      - [5. Built-in tools (by use case)](#5-built-in-tools-by-use-case)
+      - [6. Agents (LangChain)](#6-agents-langchain)
+      - [7. LCEL (LangChain Expression Language)](#7-lcel-langchain-expression-language)
+      - [Key takeaways](#key-takeaways-1)
   - [2. LCEL and Manual Tool Calling in LangChain](#2-lcel-and-manual-tool-calling-in-langchain)
     - [Introduction Chaining and LCEL Basics (LangChain Expression Language)](#introduction-chaining-and-lcel-basics-langchain-expression-language)
       - [LangChain Expression Language (LCEL) and Chaining](#langchain-expression-language-lcel-and-chaining)
@@ -70,7 +70,10 @@ Table of contents:
       - [Interactive LLM Agents](#interactive-llm-agents)
       - [Exercise: Build Interactive Agents with Tools](#exercise-build-interactive-agents-with-tools)
       - [Exercise: Build a Tool-Calling Agent](#exercise-build-a-tool-calling-agent)
-    - [Summary](#summary-1)
+    - [Summary and Cheat Sheet: Manual Tool Calling in LangChain](#summary-and-cheat-sheet-manual-tool-calling-in-langchain)
+      - [1. What is manual tool calling?](#1-what-is-manual-tool-calling)
+      - [2. Key concepts](#2-key-concepts)
+      - [3. How to manually call a tool](#3-how-to-manually-call-a-tool)
   - [3. Using Built-In Agents in LangChain](#3-using-built-in-agents-in-langchain)
 
 ## 1. Foundations of Tool Calling and Chaining
@@ -681,14 +684,14 @@ In the second notebook [`02_AI-Math-Assistant-Tool-Calling.ipynb`](./lab/02_AI-M
 | Google Imagen          | Image generation | Uses Google Vertex AI image generation  |
 | Nuclia Understanding   | Data indexing    | Indexes unstructured data for retrieval |
 
-#### Summary
+### Summary and Cheat Sheet: Tool Calling and Chaining
 
-##### 1. Tool calling fundamentals
+#### 1. Tool calling fundamentals
 
 * Tool calling lets an LLM decide which tool to use and generate arguments, but the application executes the tool.
 * The model does not execute code; it only proposes structured tool calls.
 
-##### 2. Tool calling workflow
+#### 2. Tool calling workflow
 
 * Define tools + ask question.
 * LLM selects tool and generates arguments.
@@ -711,7 +714,7 @@ result = get_weather(**tool_call["args"])  # {"temperature": 14}
 final_answer = f"It's currently {result['temperature']}°C in Paris."
 ```
 
-##### 3. Tool creation methods (LangChain)
+#### 3. Tool creation methods (LangChain)
 
 * BaseTool (subclassing)
 
@@ -745,7 +748,7 @@ def add_numbers(numbers: List[float]) -> float:
     return sum(numbers)
 ```
 
-##### 4. Inspecting and using tools
+#### 4. Inspecting and using tools
 
 * Inspect schema (name, description, args)
 
@@ -774,7 +777,7 @@ response = llm_with_tools.invoke("Sum 1, 2, 3")
 # response contains tool call info (not execution)
 ```
 
-##### 5. Built-in tools (by use case)
+#### 5. Built-in tools (by use case)
 
 * Search: SerpAPI, Wikipedia, Tavily --> web/knowledge search
 * Math & Code: LLMMathChain, Python REPL, Pandas --> computation, analysis
@@ -785,7 +788,7 @@ response = llm_with_tools.invoke("Sum 1, 2, 3")
 * ML: DALL·E, HuggingFace --> model/image generation
 
 
-##### 6. Agents (LangChain)
+#### 6. Agents (LangChain)
 
 * Agent = LLM + Tools + Memory + Execution loop
 
@@ -807,7 +810,7 @@ response = llm_with_tools.invoke("Sum 1, 2, 3")
   * create_openai_functions_agent
   * LangGraph agents
 
-##### 7. LCEL (LangChain Expression Language)
+#### 7. LCEL (LangChain Expression Language)
 
 * Used to build chains (pipelines) using `|`
 * Based on Runnables (standard interface)
@@ -825,7 +828,7 @@ chain = (
 chain.invoke(3)  # (3 + 1) * 2 = 8
 ```
 
-##### Key takeaways
+#### Key takeaways
 
 * LLM decides tool usage; application executes it.
 * Structured tools are preferred for reliability and flexibility.
@@ -1434,12 +1437,396 @@ my_agent.run("now multiply that by 3", reset_history=False)
 
 Notebook: [`04_Interactive Tool-Calling Agent-v1.ipynb`](./lab/04_Interactive%20Tool-Calling%20Agent-v1.ipynb)
 
+- This notebook is approximately the same as the `Interactive LLM Agents` section above: it defines arithmetic tools, binds them to the model, inspects `tool_calls`, executes the selected tool manually, wraps the result in a `ToolMessage`, and sends that result back to the LLM for a final answer.
+- It first walks through the tool-calling flow step by step with `add`, `subtract`, and `multiply`, then wraps the same logic in a small `ToolCallingAgent` class.
+- It also includes a second example with a `calculate_tip` tool and a simple `TipAgent`, reinforcing the same manual tool-calling pattern with a different task.
+- The notebook version is a bit simpler and older in style than the code shown above: it mainly demonstrates a single-turn flow and a single tool-call round trip.
+- The updated reference implementation is in the `Interactive LLM Agents` section above, where the code has already been modernized and extended with the `reset_history` option for fresh vs. multi-turn conversations.
+
 #### Exercise: Build a Tool-Calling Agent
+
+**Very important notebook**.
 
 Notebook: [`05_Tool-Calling Agent-v1.ipynb`](./lab/05_Tool-Calling-v1.ipynb)
 
-### Summary
+- This notebook builds a YouTube-focused tool-calling agent that can search videos, extract video IDs, fetch transcripts, pull metadata, retrieve thumbnails, and rank search results by recency, views, or likes.
+- It starts by defining each capability as a LangChain tool with `@tool`, then adds those tools to a shared `tools` list and binds them to the chat model with `llm.bind_tools(tools)`.
+- It demonstrates manual tool calling first, so you can see the underlying mechanics: the LLM proposes a tool call, the application executes it, wraps the result in a `ToolMessage`, and sends that result back to the LLM.
+- It then builds a fixed-sequence summarization chain for a common workflow such as “summarize this YouTube video”, where the model typically needs to extract the video ID first and fetch the transcript second.
+- After that, it generalizes the approach into a recursive universal chain that keeps processing tool calls until the model stops requesting them.
+- This makes the notebook more flexible than a single hardcoded demo: the same chain can summarize one video, fetch metadata for ranked search results, or combine multiple tools in sequence depending on the query.
+- Compared with the earlier trending-page version, the notebook now uses `get_ranked_videos(...)` instead of scraping YouTube Trending, because the old Trending page is no longer reliable.
+
+Most important code parts:
+
+The notebook starts by defining reusable YouTube tools. These are the core building blocks that the LLM can call:
+
+```python
+@tool
+def extract_video_id(url: str) -> str:
+    pattern = r'(?:v=|be/|embed/)([a-zA-Z0-9_-]{11})'
+    match = re.search(pattern, url)
+    return match.group(1) if match else "Error: Invalid YouTube URL"
+
+@tool
+def fetch_transcript(video_id: str, language: str = "en") -> str:
+    ytt_api = YouTubeTranscriptApi()
+    transcript = ytt_api.fetch(video_id, languages=[language])
+    return " ".join([snippet.text for snippet in transcript.snippets])
+
+@tool
+def get_full_metadata(url: str) -> dict:
+    with yt_dlp.YoutubeDL({'quiet': True, 'logger': yt_dpl_logger}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return {
+            'title': info.get('title'),
+            'views': info.get('view_count'),
+            'duration': info.get('duration'),
+            'channel': info.get('uploader'),
+            'likes': info.get('like_count'),
+            'comments': info.get('comment_count'),
+            'chapters': info.get('chapters', [])
+        }
+```
+
+It also includes a more general search-and-rank tool that replaces the broken trending-page approach:
+
+```python
+@tool
+def get_ranked_videos(query: str, sort_by: str = "views", max_results: int = 10) -> List[Dict]:
+    valid_sort_keys = {"latest", "views", "likes"}
+    if sort_by not in valid_sort_keys:
+        return [{"error": f"sort_by must be one of: {sorted(valid_sort_keys)}"}]
+
+    search_pool = max(max_results * 3, 15)
+    with yt_dlp.YoutubeDL({
+        'quiet': True,
+        'no_warnings': True,
+        'logger': yt_dpl_logger,
+        'playlistend': search_pool,
+    }) as ydl:
+        info = ydl.extract_info(f"ytsearch{search_pool}:{query}", download=False)
+
+    entries = info.get('entries', [])
+    videos = []
+    for entry in entries:
+        if entry.get('_type') not in (None, 'video'):
+            continue
+        videos.append({
+            'title': entry.get('title'),
+            'video_id': entry.get('id'),
+            'url': entry.get('webpage_url') or f"https://youtu.be/{entry.get('id')}",
+            'channel': entry.get('channel') or entry.get('uploader', 'N/A'),
+            'duration': entry.get('duration', 0) or 0,
+            'view_count': entry.get('view_count', 0) or 0,
+            'like_count': entry.get('like_count', 0) or 0,
+            'upload_date': entry.get('upload_date', ''),
+        })
+
+    sort_key_map = {
+        'latest': lambda item: item['upload_date'],
+        'views': lambda item: item['view_count'],
+        'likes': lambda item: item['like_count'],
+    }
+    videos.sort(key=sort_key_map[sort_by], reverse=True)
+    return videos[:max_results]
+```
+
+All tools are then registered with the model and made available through a mapping dictionary:
+
+```python
+llm_with_tools = llm.bind_tools(tools)
+
+tool_mapping = {
+    "get_thumbnails": get_thumbnails,
+    "get_ranked_videos": get_ranked_videos,
+    "extract_video_id": extract_video_id,
+    "fetch_transcript": fetch_transcript,
+    "search_youtube": search_youtube,
+    "get_full_metadata": get_full_metadata,
+}
+```
+
+The helper below is the key bridge between the model and the actual Python tools:
+
+```python
+def execute_tool(tool_call):
+    """Execute single tool call and return ToolMessage"""
+    try:
+        result = tool_mapping[tool_call["name"]].invoke(tool_call["args"])
+        return ToolMessage(
+            content=str(result),
+            tool_call_id=tool_call["id"]
+        )
+    except Exception as e:
+        return ToolMessage(
+            content=f"Error: {str(e)}",
+            tool_call_id=tool_call["id"]
+        )
+```
+
+For common video-summary tasks, the notebook builds a fixed two-step chain:
+
+```python
+summarization_chain = (
+    RunnablePassthrough.assign(
+        messages=lambda x: [HumanMessage(content=x["query"])]
+    )
+    | RunnablePassthrough.assign(
+        ai_response=lambda x: llm_with_tools.invoke(x["messages"])
+    )
+    | RunnablePassthrough.assign(
+        tool_messages=lambda x: [
+            execute_tool(tc) for tc in x["ai_response"].tool_calls
+        ]
+    )
+    | RunnablePassthrough.assign(
+        messages=lambda x: x["messages"] + [x["ai_response"]] + x["tool_messages"]
+    )
+    | RunnablePassthrough.assign(
+        ai_response2=lambda x: llm_with_tools.invoke(x["messages"])
+    )
+    | RunnablePassthrough.assign(
+        tool_messages2=lambda x: [
+            execute_tool(tc) for tc in x["ai_response2"].tool_calls
+        ]
+    )
+    | RunnablePassthrough.assign(
+        messages=lambda x: x["messages"] + [x["ai_response2"]] + x["tool_messages2"]
+    )
+    | RunnablePassthrough.assign(
+        summary=lambda x: llm_with_tools.invoke(x["messages"]).content
+    )
+    | RunnableLambda(lambda x: x["summary"])
+)
+```
+
+And finally, it generalizes that into a recursive tool-calling loop that can keep going until the model no longer asks for tools:
+
+```python
+def process_tool_calls(messages):
+    last_message = messages[-1]
+    tool_messages = [
+        execute_tool(tc)
+        for tc in getattr(last_message, 'tool_calls', [])
+    ]
+    updated_messages = messages + tool_messages
+    next_ai_response = llm_with_tools.invoke(updated_messages)
+    return updated_messages + [next_ai_response]
+
+def should_continue(messages):
+    last_message = messages[-1]
+    return bool(getattr(last_message, 'tool_calls', None))
+
+def _recursive_chain(messages):
+    if should_continue(messages):
+        new_messages = process_tool_calls(messages)
+        return _recursive_chain(new_messages)
+    return messages
+
+recursive_chain = RunnableLambda(_recursive_chain)
+
+universal_chain = (
+    RunnableLambda(lambda x: [HumanMessage(content=x["query"])])
+    | RunnableLambda(lambda messages: messages + [llm_with_tools.invoke(messages)])
+    | recursive_chain
+)
+```
+
+### Summary and Cheat Sheet: Manual Tool Calling in LangChain
+
+#### 1. What is manual tool calling?
+
+Manual tool calling in LangChain gives you precise control over how external tools are used. Instead of relying on the LLM to autonomously invoke tools, developers parse the LLM's output to extract tool calls, validate inputs, and execute functions manually.
+
+This approach is particularly beneficial in production environments where reliability, security, and auditability are paramount.
+
+#### 2. Key concepts
+
+| Term | Definition |
+| --- | --- |
+| Tool | A Python function paired with a schema that defines its name, description, and expected arguments. Tools can be created using the `@tool` decorator or by defining a class inherited from `BaseTool`. |
+| Tool Schema | A structured definition, often using Pydantic models, that spells out exactly what input a tool expects. It helps ensure the information is correct and easy to work with. |
+| Tool Call | An instruction generated by the LLM indicating which tool to invoke and with what arguments. Typically represented in a structured format like JSON. |
+| Automatic Tool Calling | The model autonomously decides to invoke tools based on the input and handles execution without developer intervention. |
+| Manual Tool Calling | The developer or user intercepts the model's tool call suggestions, validates inputs, and executes the tools, providing greater control over the process. |
+| `AIMessage` | A message type that represents the model's response, which may include tool call instructions in the `.tool_calls` attribute. |
+| `ToolMessage` | A message type used to convey the result of a tool execution back to the model, maintaining context and enabling informed subsequent responses. It contains the tool output and associated `tool_call_id`. |
+| `tool_call_id` | A unique identifier for each tool call, allowing the system to match the tool's output (`ToolMessage`) with the corresponding request (`AIMessage`). This is especially useful when handling multiple tool calls concurrently. |
+
+#### 3. How to manually call a tool
+
+Here is a step-by-step look at how you can take control and manually call a tool.
+
+| Step | Details |
+| --- | --- |
+| Define your tools | First, define a simple tool using the `@tool` shortcut. |
+| Bind tools to the model | Attach the tools to a chat model that supports tool calling. |
+| Parse tool calls | After invoking the model, parse its output to extract tool calls. |
+| Validate tool arguments | Use a Pydantic model or perform a manual check to validate inputs. |
+| Understand tool execution | Decide whether to execute the tool directly and whether to manually create a `ToolMessage`. |
+| Purpose of `ToolMessage` | Feed tool results back to the LLM so it can continue the conversation and produce a final answer. |
+| Controlled tool calling | Add validation, filtering, business rules, and custom error handling before executing tools. |
+
+Define your tools:
+
+```python
+from langchain_core.tools import tool
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """Multiply two numbers."""
+    return a * b
+```
+
+Bind tools to the model:
+
+```python
+model_with_tools = model.bind_tools([multiply])
+```
+
+Parse tool calls:
+
+```python
+response = model_with_tools.invoke("What is 2 multiplied by 3?")
+tool_calls = response.tool_calls  # Contains tool name and arguments
+```
+
+This is what `tool_calls` looks like:
+
+```python
+[{
+    'name': 'multiply',
+    'args': {'a': 2, 'b': 3},
+    'id': 'chatcmpl-tool-94d27a8e35b44212bfe6c8d26553c149',
+    'type': 'tool_call'
+}]
+```
+
+Validate tool arguments:
+
+```python
+from pydantic import BaseModel
+
+class MultiplyInput(BaseModel):
+    a: int
+    b: int
+
+validated_input = MultiplyInput(**tool_calls[0]['args'])
+```
+
+This is what `validated_input` looks like:
+
+```python
+MultiplyInput(a=2, b=3)
+```
+
+Understand tool execution:
+
+- `tool.invoke(args_dict)` returns a raw result such as `6`.
+- `tool.invoke(tool_call_object)` can return a `ToolMessage` automatically.
+- The "manual" part of manual tool calling is about controlling whether, which, and when tools are executed.
+
+When you invoke a LangChain tool with a `ToolCall` object, you often get back a `ToolMessage`, so you do not always need to create one manually.
+
+```python
+result = multiply.invoke(validated_input.model_dump())
+```
+
+Purpose of `ToolMessage`:
+
+`ToolMessage` is used to maintain context and state throughout the conversation between the user and the model. `ToolMessage` objects are essential for feeding tool results back to the LLM so it can continue the conversation. The purpose is not just getting the tool result, but feeding that result back to the LLM so it can:
+
+- see what the tool returned
+- continue the conversation with that context
+- give a final answer to the user
+
+```python
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+
+# Complete conversation flow
+messages = [
+    HumanMessage("What is 2 multiplied by 3?"),
+    AIMessage("I'll use the multiply tool", tool_calls=[{'name': 'multiply', 'args': {'a': 2, 'b': 3}, 'id': 'call_123'}]),
+    ToolMessage(content="6", tool_call_id="call_123")  # This tells LLM the result!
+]
+
+final_response = model.invoke(messages)
+# LLM: "The result of 2 multiplied by 3 is 6."
+```
+
+When you run the statement below, it is not truly manual tool calling. It is more like semi-automatic tool calling because the tool is always executed:
+
+```python
+result = multiply.invoke(validated_input.model_dump())
+```
+
+Controlled tool calling:
+
+Here is how you can implement controlled tool calling:
+
+```python
+from langchain_core.messages import ToolMessage
+
+# Manual decision making and validation for multiply tool
+for tool_call in response.tool_calls:
+    if tool_call['name'] == 'multiply':
+        # Check if we should execute this specific call
+        a, b = tool_call['args']['a'], tool_call['args']['b']
+
+        # Example: Only allow positive number multiplication
+        if a > 0 and b > 0:
+            # Validate and execute
+            validated_input = MultiplyInput(**tool_call['args'])
+            tool_msg = multiply.invoke(tool_call)
+            messages.append(tool_msg)
+        else:
+            # Reject negative numbers
+            error_msg = ToolMessage(
+                content="Multiplication with negative numbers not allowed",
+                tool_call_id=tool_call['id']
+            )
+            messages.append(error_msg)
+    else:
+        # Skip unknown tools
+        skip_msg = ToolMessage(
+            content=f"Tool '{tool_call['name']}' execution skipped",
+            tool_call_id=tool_call['id']
+        )
+        messages.append(skip_msg)
+```
+
+What makes the above code manual?
+
+1. Conditional execution: you decide whether to run the tool rather than blindly executing every tool the LLM asks for.
+
+```python
+# MANUAL DECISION: Should we execute this tool call?
+if a > 0 and b > 0:
+    # YES - execute the tool
+    tool_msg = multiply.invoke(tool_call)
+else:
+    # NO - reject the tool call
+    error_msg = ToolMessage(content="Multiplication with negative numbers not allowed")
+```
+
+2. Custom business logic: you can override the LLM's preference with your own rules.
+
+```python
+# CUSTOM RULE: Only allow positive number multiplication
+if a > 0 and b > 0:
+```
+
+3. Tool filtering: you can skip tools you do not recognize or want to allow.
+
+```python
+if tool_call['name'] == 'multiply':
+    # Handle multiply tool
+else:
+    # DECISION: Skip unknown tools
+    skip_msg = ToolMessage(content=f"Tool '{tool_call['name']}' execution skipped")
+```
+
+4. Custom error handling: instead of letting a tool fail, you can proactively return a more meaningful message.
 
 ## 3. Using Built-In Agents in LangChain
-
-
