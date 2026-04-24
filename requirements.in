@@ -28,6 +28,7 @@ pip
 pydantic
 pytest
 python-dotenv
+pytube
 safetensors
 scikit-learn
 seaborn
@@ -40,3 +41,5 @@ transformers[torch]
 umap-learn
 wikipedia
 wordcloud
+youtube-transcript-api
+yt-dlp
