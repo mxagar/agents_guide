@@ -66,6 +66,10 @@ Table of contents:
       - [When to Call Tools Manually](#when-to-call-tools-manually)
       - [Structured Outputs for Tool Calling](#structured-outputs-for-tool-calling)
     - [Parsing and Validating Tool Calls](#parsing-and-validating-tool-calls)
+      - [LLM Agents with Tools](#llm-agents-with-tools)
+      - [Interactive LLM Agents](#interactive-llm-agents)
+      - [Exercise: Build Interactive Agents with Tools](#exercise-build-interactive-agents-with-tools)
+      - [Exercise: Build a Tool-Calling Agent](#exercise-build-a-tool-calling-agent)
     - [Summary](#summary-1)
   - [3. Using Built-In Agents in LangChain](#3-using-built-in-agents-in-langchain)
 
@@ -1245,6 +1249,194 @@ This pattern is handy when the next step is programmatic, such as:
 
 
 ### Parsing and Validating Tool Calls
+
+#### LLM Agents with Tools
+
+* Manual tool calling enables an LLM to act as an agent by selecting tools, extracting parameters, invoking functions, and incorporating results into responses.
+* Workflow: user query --> LLM selects tool + extracts parameters --> tool executes --> result returned --> LLM generates final answer.
+* Setup:
+  * Initialize a chat model (e.g., GPT-4 mini) as the central interface (`llm.invoke`).
+  * Define tools using the `@tool` decorator; docstrings guide tool selection.
+  * Bind tools to the model so it can recognize and use them.
+* Extend capability by adding multiple tools (e.g., add, subtract, multiply).
+* Use a mapping dictionary to dynamically call tools by name, enabling flexible function execution based on LLM output.
+* Inputs are passed as dictionaries matching function parameters; `invoke()` maps keys to arguments automatically.
+* Binding tools wraps the LLM into a tool-aware model capable of handling queries requiring computation.
+* Chat history can be maintained to improve context and response quality.
+
+![Calculator Agent](./assets/calculator_agent.png)
+
+```python
+from langchain.chat_models import init_chat_model
+from langchain.tools import tool
+
+# Initialize chat model
+llm = init_chat_model("gpt-4o-mini", model_provider="openai")
+# llm.invoke(...) uses this instance
+
+# Define tools with @tool (docstring guides LLM)
+# The docstring is used  by the agent to understand when to use the tool!
+@tool
+def add(a: int, b: int) -> int:
+    """Add two integers."""
+    return a + b
+
+@tool
+def subtract(a: int, b: int) -> int:
+    """Subtract b from a."""
+    return a - b
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """Multiply two integers."""
+    return a * b
+
+# Bind tools to LLM
+tools = [add, subtract, multiply]
+llm_with_tools = llm.bind_tools(tools)
+# Model can now select and call these tools
+
+# Dynamic tool invocation via mapping dictionary
+tool_map = {
+    "add": add,
+    "subtract": subtract,
+    "multiply": multiply
+}
+
+inputs = {"a": 1, "b": 2}
+result = tool_map["add"].invoke(inputs)  # 3
+# invoke() maps dict keys to function parameters automatically
+
+# Use LLM looping tool calls and results manually
+# This is an ALTERNATIVE to create_agent.
+# Here, we loop manually instead of letting the agent do it for us, which gives us more control and visibility into the process.
+# create_agent(...) abstracts this entire loop (it does it on its own or asks LLM to choose a tool).
+# So it is preferable to use create_agent, unless we want to have full control.
+messages = [("human", "Add 1 and 2, then multiply 3 and 4.")]
+response = llm_with_tools.invoke(messages)
+
+# Call all tools, collect results, and tool descriptions
+tool_messages = []
+for tool_call in response.tool_calls:
+    result = tool_map[tool_call["name"]].invoke(tool_call["args"])
+    tool_messages.append(
+        ToolMessage(content=str(result), tool_call_id=tool_call["id"])
+    )
+# Collect all messages (original + tool results) and invoke the model again to get the final answer.
+final_response = llm_with_tools.invoke([*messages, response, *tool_messages])
+```
+
+#### Interactive LLM Agents
+
+Here, the example above is extended.
+
+* Interactive agents extend manual tool calling by managing full conversation state (chat history), extracting tool calls from LLM outputs, executing them, and feeding results back for final responses.
+* Workflow:
+  * Convert user query into a `HumanMessage` and store in `chat_history`.
+  * Invoke LLM with tools using full chat history.
+  * LLM returns an `AIMessage` containing `tool_calls` (not final text).
+  * Extract tool name, arguments, and call ID from `tool_calls`.
+  * Manually execute the tool using these parameters.
+  * Wrap result in a `ToolMessage` and append to `chat_history`.
+  * Re-invoke LLM with updated history to generate final natural language answer.
+* Tool call structure includes:
+  * name: tool to call.
+  * args: JSON parameters.
+  * id: links tool response to request (important for multiple calls).
+  * type: indicates tool call.
+* Chat history maintains full context: user input → model tool request → tool result → final response.
+* Mapping dictionaries are used to dynamically resolve tool names to functions for execution.
+* This loop enables precise control while supporting multi-step reasoning and multiple tool calls.
+* Encapsulating this logic in an agent class (e.g., ToolCallingAgent) automates:
+  * tool binding
+  * chat history management
+  * tool extraction and execution
+  * response generation
+* Result: transforms LLM into a context-aware, multi-step agent capable of interpreting intent, selecting tools, and producing coherent final answers even from imperfect input.
+
+```python
+from langchain.chat_models import init_chat_model
+from langchain.messages import HumanMessage, ToolMessage
+from langchain.tools import tool
+
+llm = init_chat_model("gpt-4o-mini", model_provider="openai")
+
+@tool
+def add(a: int, b: int) -> int:
+    """Add two integers."""
+    return a + b
+
+@tool
+def subtract(a: int, b: int) -> int:
+    """Subtract b from a."""
+    return a - b
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """Multiply two integers."""
+    return a * b
+
+tools = [add, subtract, multiply]
+tool_map = {tool.name: tool for tool in tools}
+
+# This tool agent class encapsulates the manual tool-calling loop,
+# managing chat history and tool execution.
+# Note that we can reset the history for each new query, or keep it for multi-turn conversations.
+# For our case, it makes sense to reset the history for each new query.
+class ToolCallingAgent:
+    def __init__(self, llm):
+        self.llm_with_tools = llm.bind_tools(tools)
+        self.tool_map = tool_map
+        self.chat_history = []
+
+    def run(self, query: str, reset_history: bool = True) -> str:
+        if reset_history:
+            self.chat_history = []
+
+        self.chat_history.append(HumanMessage(content=query))
+        response = self.llm_with_tools.invoke(self.chat_history)
+        if not response.tool_calls:
+            self.chat_history.append(response)
+            return response.content
+
+        while response.tool_calls:
+            self.chat_history.append(response)
+
+            tool_messages = []
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                tool_call_id = tool_call["id"]
+
+                tool_result = self.tool_map[tool_name].invoke(tool_args)
+                tool_messages.append(
+                    ToolMessage(content=str(tool_result), tool_call_id=tool_call_id)
+                )
+
+            self.chat_history.extend(tool_messages)
+            response = self.llm_with_tools.invoke(self.chat_history)
+
+        self.chat_history.append(response)
+        return response.content
+
+
+my_agent = ToolCallingAgent(llm)
+
+my_agent.run("one plus 2")  # fresh conversation
+my_agent.run("one - 2")  # fresh conversation
+
+# Multi-turn usage:
+my_agent.run("one plus 2", reset_history=True)
+my_agent.run("now multiply that by 3", reset_history=False)
+```
+
+#### Exercise: Build Interactive Agents with Tools
+
+Notebook: [`04_Interactive Tool-Calling Agent-v1.ipynb`](./lab/04_Interactive%20Tool-Calling%20Agent-v1.ipynb)
+
+#### Exercise: Build a Tool-Calling Agent
+
+Notebook: [`05_Tool-Calling Agent-v1.ipynb`](./lab/05_Tool-Calling-v1.ipynb)
 
 ### Summary
 
