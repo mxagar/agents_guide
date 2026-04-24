@@ -75,6 +75,9 @@ Table of contents:
       - [2. Key concepts](#2-key-concepts)
       - [3. How to manually call a tool](#3-how-to-manually-call-a-tool)
   - [3. Using Built-In Agents in LangChain](#3-using-built-in-agents-in-langchain)
+    - [Natural Language Data Visualization](#natural-language-data-visualization)
+    - [Conversational Database Access](#conversational-database-access)
+    - [Summary and Cheat Sheet: Built-In Agents in LangChain](#summary-and-cheat-sheet-built-in-agents-in-langchain)
 
 ## 1. Foundations of Tool Calling and Chaining
 
@@ -1830,3 +1833,10 @@ else:
 4. Custom error handling: instead of letting a tool fail, you can proactively return a more meaningful message.
 
 ## 3. Using Built-In Agents in LangChain
+
+### Natural Language Data Visualization
+
+### Conversational Database Access
+
+### Summary and Cheat Sheet: Built-In Agents in LangChain
+
