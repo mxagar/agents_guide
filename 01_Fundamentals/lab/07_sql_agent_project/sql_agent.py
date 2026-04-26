@@ -1,6 +1,7 @@
 """Natural-language SQL agent for the Chinook MySQL database.
 
-Environment variables are loaded from the repository-level .env file.
+Environment variables are loaded from .env in the current directory, this
+project directory, or the repository root.
 Required:
     OPENAI_API_KEY
 
@@ -26,13 +27,35 @@ from llm_agent import create_llm
 warnings.filterwarnings("ignore")
 
 
+PROJECT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PROMPT = "How many Album are there in the database?"
 
 
 def load_environment() -> None:
-    """Load repository-level environment variables."""
-    load_dotenv(PROJECT_ROOT / ".env")
+    """Load local and repository environment variables.
+
+    Precedence is:
+    1. Current working directory .env
+    2. This SQL project directory .env
+    3. Repository root .env
+
+    Later files fill only missing values.
+    """
+    env_paths = [
+        Path.cwd() / ".env",
+        PROJECT_DIR / ".env",
+        PROJECT_ROOT / ".env",
+    ]
+    seen = set()
+
+    for env_path in env_paths:
+        resolved = env_path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.exists():
+            load_dotenv(resolved, override=False)
 
 
 def mysql_uri_from_env() -> str:

@@ -2226,7 +2226,7 @@ See [`lab/07_sql_agent_project/README.md`](./lab/07_sql_agent_project/README.md)
 * Dataset: uses the Chinook media-store schema, including artists, albums, tracks, playlists, customers, employees, invoices, and invoice lines.
 * Database setup: load the already-downloaded [`chinook_mysql.sql`](./lab/07_sql_agent_project/chinook_mysql.sql) file into a local MySQL server and verify that `Album` contains 347 rows.
 * Environment: use the existing `agents` conda environment and repository-level [`requirements.in`](../requirements.in), not a separate project virtual environment.
-* Configuration: load `OPENAI_API_KEY`, optional OpenAI model settings, and MySQL connection variables from the repository-level `.env` file.
+* Configuration: load `OPENAI_API_KEY`, optional OpenAI model settings, and MySQL connection variables from `.env` in the SQL project folder or repository root.
 * Model: [`llm_agent.py`](./lab/07_sql_agent_project/llm_agent.py) creates a `ChatOpenAI` model and provides a quick model smoke test.
 * Agent: [`sql_agent.py`](./lab/07_sql_agent_project/sql_agent.py) builds a `SQLDatabase` connection, creates a LangChain SQL agent, and accepts prompts from the command line with `--prompt`.
 * Notebook: [`07-test-sql-agent-connection.ipynb`](./lab/07_sql_agent_project/07-test-sql-agent-connection.ipynb) walks through `.env` loading, OpenAI model access, MySQL connection, direct SQL checks, and a final agent invocation.
@@ -2244,9 +2244,13 @@ from langchain_community.agent_toolkits import create_sql_agent
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_openai import ChatOpenAI
 
-# Load repo-level .env from 01_Fundamentals/lab/07_sql_agent_project.
+# Load .env from the current SQL project folder first, then the repo root.
+project_dir = Path(__file__).resolve().parent
 project_root = Path(__file__).resolve().parents[3]
-load_dotenv(project_root / ".env")
+
+for env_path in (Path.cwd() / ".env", project_dir / ".env", project_root / ".env"):
+    if env_path.exists():
+        load_dotenv(env_path, override=False)
 
 llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),

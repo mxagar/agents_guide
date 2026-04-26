@@ -7,7 +7,7 @@ This project builds a LangChain SQL agent for the [Chinook Database](https://doc
 The original lab instructions are in [`Instructions.pdf`](./Instructions.pdf). This implementation keeps the same project goal but updates the stack:
 
 * Uses OpenAI chat models with `langchain-openai` instead of IBM/Watson models.
-* Loads secrets and connection settings from the repository-level `.env` file.
+* Loads secrets and connection settings from `.env` in the current SQL project folder or from the repository root.
 * Uses the repository-level [`requirements.in`](../../../requirements.in) instead of creating a separate project virtual environment.
 * Uses the already-downloaded [`chinook_mysql.sql`](./chinook_mysql.sql) file.
 * Adds [`07-test-sql-agent-connection.ipynb`](./07-test-sql-agent-connection.ipynb) to test the connection step by step.
@@ -30,7 +30,10 @@ If you need to refresh the environment, run this from the repository root:
 
 ```bash
 conda activate agents
-python -m pip install -r requirements.in
+
+# Compile and install all dependencies
+pip-compile requirements.in
+pip-sync requirements.txt
 ```
 
 The important packages for this project are:
@@ -46,7 +49,12 @@ The important packages for this project are:
 
 ## Environment Variables
 
-Create or update the repository-level `.env` file:
+Create or update a `.env` file in either location:
+
+* Current SQL project folder: `01_Fundamentals/lab/07_sql_agent_project/.env`
+* Repository root: `.env`
+
+The Python scripts check the current working directory first, then this SQL project folder, then the repository root. The notebook checks the current working directory first, then the repository root. Values loaded earlier take precedence, and later files fill only missing values.
 
 ```bash
 OPENAI_API_KEY=your_openai_api_key
@@ -75,12 +83,14 @@ Install MySQL with Homebrew:
 brew install mysql
 brew services start mysql
 mysql_secure_installation
+# Enter PW from .env / PW Manager
 ```
 
 Open the MySQL CLI:
 
 ```bash
 mysql -u root -p
+# Enter PW
 ```
 
 Useful UI options on macOS:
@@ -114,10 +124,12 @@ Useful UI options on Windows:
 From the MySQL CLI, source the SQL file:
 
 ```sql
-SOURCE /absolute/path/to/agents_guide/01_Fundamentals/lab/07_sql_agent_project/chinook_mysql.sql;
+--- mysql -u root -p
+SOURCE ./chinook_mysql.sql;
 SHOW DATABASES;
 USE Chinook;
 SELECT COUNT(*) FROM Album;
+--- 347
 ```
 
 The album count should be `347`.
@@ -136,9 +148,10 @@ Run the model smoke test:
 conda activate agents
 cd 01_Fundamentals/lab/07_sql_agent_project
 python llm_agent.py
+# The capital of Ontario is Toronto.
 ```
 
-Expected behavior: the script returns a short answer to a simple question. If it fails, check that `.env` exists at the repository root and contains `OPENAI_API_KEY`.
+Expected behavior: the script returns a short answer to a simple question. If it fails, check that `.env` exists in the SQL project folder or repository root and contains `OPENAI_API_KEY`.
 
 ## Test the MySQL Connection
 
@@ -184,7 +197,7 @@ python sql_agent.py --quiet --prompt "How many albums are in the database?"
 
 ## How It Works
 
-1. `llm_agent.py` loads the repo-level `.env` file and creates a `ChatOpenAI` model.
+1. `llm_agent.py` loads `.env` from the current directory, SQL project folder, or repository root and creates a `ChatOpenAI` model.
 2. `sql_agent.py` builds a MySQL SQLAlchemy URI from `MYSQL_*` environment variables.
 3. `SQLDatabase.from_uri(...)` wraps the Chinook database for LangChain.
 4. `create_sql_agent(...)` gives the model SQL tools for schema inspection and query execution.
