@@ -33,6 +33,7 @@ Table of contents:
       - [Build Effective AI Tools for Advanced LLMs](#build-effective-ai-tools-for-advanced-llms)
       - [Build Intelligent Agents for Dynamic LLM Tool Use](#build-intelligent-agents-for-dynamic-llm-tool-use)
       - [Exercises: Tool Calling](#exercises-tool-calling)
+        - [Note: `create_agent` replaces `create_react_agent`](#note-create_agent-replaces-create_react_agent)
       - [Popular Built-in Tools in LangChain](#popular-built-in-tools-in-langchain)
         - [Search tools](#search-tools)
         - [Code interpretation and data analysis](#code-interpretation-and-data-analysis)
@@ -76,6 +77,8 @@ Table of contents:
       - [3. How to manually call a tool](#3-how-to-manually-call-a-tool)
   - [3. Using Built-In Agents in LangChain](#3-using-built-in-agents-in-langchain)
     - [Natural Language Data Visualization](#natural-language-data-visualization)
+      - [From Natural Language to Data Visualization](#from-natural-language-to-data-visualization)
+      - [Exercise: Build Your Own Data Visualization Agent](#exercise-build-your-own-data-visualization-agent)
     - [Conversational Database Access](#conversational-database-access)
     - [Summary and Cheat Sheet: Built-In Agents in LangChain](#summary-and-cheat-sheet-built-in-agents-in-langchain)
 
@@ -618,6 +621,112 @@ In the second notebook [`02_AI-Math-Assistant-Tool-Calling.ipynb`](./lab/02_AI-M
 
 - `create_react_agent(...)` is used to build a graph-based loop where the model can reason, pick a tool, observe the result, and keep going until it has enough information. That makes it especially useful for multi-step tasks, multi-tool orchestration, and inspecting the full message/tool-call sequence. It is also closer to the LangGraph-style direction the ecosystem is moving toward, so it is better suited for more agentic workflows than a simple one-shot tool demo.
 - `WikipediaAPIWrapper` is used, which allows the agent to fetch information from Wikipedia. This means the agent is no longer limited to computation from user-provided numbers. It can fetch outside factual context first, then use your math tools on top of that result. That is the big practical advantage: the agent can combine retrieval plus computation in one flow, which is much closer to real-world agent behavior.
+
+##### Note: `create_agent` replaces `create_react_agent`
+
+Example:
+
+![Calculator ReAct Agent](./assets/calculator_agent.png)
+
+```python
+from typing import List
+from langchain.agents import create_agent
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langchain_community.utilities import WikipediaAPIWrapper
+from langchain_community.tools import WikipediaQueryRun
+
+# 1. Define math tools
+@tool
+def add(numbers: List[float]) -> float:
+    """Add a list of numbers."""
+    return sum(numbers)
+
+@tool
+def subtract(a: float, b: float) -> float:
+    """Subtract b from a."""
+    return a - b
+
+@tool
+def multiply(numbers: List[float]) -> float:
+    """Multiply a list of numbers."""
+    result = 1
+    for n in numbers:
+        result *= n
+    return result
+
+@tool
+def divide(a: float, b: float) -> float:
+    """Divide a by b."""
+    if b == 0:
+        raise ValueError("Cannot divide by zero.")
+    return a / b
+
+
+# 2. Define external information tool
+wiki_api = WikipediaAPIWrapper(top_k_results=1, doc_content_chars_max=1000)
+wiki_tool_base = WikipediaQueryRun(api_wrapper=wiki_api)
+
+@tool
+def search_wikipedia(query: str) -> str:
+    """
+    Search Wikipedia and return a short factual summary.
+
+    Args:
+        query: Search query for Wikipedia.
+
+    Returns:
+        A short Wikipedia summary.
+    """
+    return wiki_tool_base.run(query)
+
+
+# 3. Create tool list
+tools = [
+    add,
+    subtract,
+    multiply,
+    divide,
+    search_wikipedia,
+]
+
+
+# 4. Initialize LLM
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+
+# 5. Create LangChain v1 agent
+system_prompt = (
+    "You are a helpful mathematical assistant. "
+    "Use math tools for calculations and Wikipedia for factual lookup. "
+    "When a query requires both retrieval and math, retrieve first, then calculate."
+)
+
+agent = create_agent(
+    model=llm,
+    tools=tools,
+    system_prompt=system_prompt,
+)
+
+
+# 6. Invoke agent with pure math query
+response = agent.invoke({
+    "messages": [
+        {"role": "user", "content": "Multiply 2, 3, and 4."}
+    ]
+})
+print(response["messages"][-1].content)
+
+
+# 7. Invoke agent with retrieval + math query
+response = agent.invoke({
+    "messages": [
+        {"role": "user", "content": "What is the population of Canada? Multiply it by 0.75."}
+    ]
+})
+print(response["messages"][-1].content)
+```
+
 
 #### Popular Built-in Tools in LangChain
 
@@ -1350,7 +1459,7 @@ Here, the example above is extended.
   * args: JSON parameters.
   * id: links tool response to request (important for multiple calls).
   * type: indicates tool call.
-* Chat history maintains full context: user input → model tool request → tool result → final response.
+* Chat history maintains full context: user input --> model tool request --> tool result --> final response.
 * Mapping dictionaries are used to dynamically resolve tool names to functions for execution.
 * This loop enables precise control while supporting multi-step reasoning and multiple tool calls.
 * Encapsulating this logic in an agent class (e.g., ToolCallingAgent) automates:
@@ -1836,7 +1945,200 @@ else:
 
 ### Natural Language Data Visualization
 
+#### From Natural Language to Data Visualization
+
+* The LangChain Pandas agent enables natural language interaction with a Pandas DataFrame, automatically generating Python code to analyze data and produce results or visualizations.
+* It is preconfigured with tools and prompts, operates directly on a provided DataFrame, and returns answers such as counts, summaries, or plots.
+* Setup:
+    * Load data into a Pandas DataFrame.
+    * Initialize a LangChain v1 chat model with `ChatOpenAI` from `langchain-openai`.
+    * Create the agent with `create_pandas_dataframe_agent(llm, df)` from `langchain-experimental`.
+* Usage:
+    * Query with natural language via `agent.invoke({"input": "..."})`.
+    * Agent translates query -> Python code (e.g., filtering, aggregation) -> executes -> returns result.
+    * Intermediate steps expose generated code for transparency/debugging.
+* Capabilities:
+    * Data queries (e.g., counts, filters).
+    * Statistical summaries.
+    * Visualization generation (e.g., bar charts).
+    * Semantic understanding (e.g., mapping "gender" -> the `sex` column).
+* Key difference vs other agents:
+    * Specialized for DataFrame operations by giving the agent Python execution tools over the provided DataFrame.
+* Best practices:
+    * Use a sandboxed environment because the agent can execute arbitrary Python code.
+    * Keep `allow_dangerous_code=True` only for trusted local or isolated environments.
+    * Store the OpenAI API key in `OPENAI_API_KEY`; do not hard-code credentials.
+    * Write clear prompts to reduce ambiguity.
+    * Validate results with human oversight.
+    * Iterate prompts for better accuracy.
+* Key idea: the agent turns natural language into executable data analysis code, enabling rapid exploration but requiring careful control for safety and correctness.
+
+![Create Pandas Agent](./assets/create_pandas_agent.png)
+
+```python
+# 1. Load a dataset into a Pandas DataFrame
+import pandas as pd
+
+df = pd.read_csv("student-mat.csv")
+
+# Inspect columns and first rows
+print(df.head())
+print(df.columns)
+
+# 2. Initialize a LangChain v1 chat model with OpenAI
+# Requires: pip install -U langchain langchain-openai langchain-experimental pandas matplotlib tabulate
+# Requires the OPENAI_API_KEY environment variable.
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="gpt-4.1-mini",
+    temperature=0,
+    max_tokens=512,
+)
+
+# 3. Create the LangChain Pandas DataFrame agent.
+# The pandas agent lives in langchain-experimental because it executes Python code.
+from langchain_experimental.agents import create_pandas_dataframe_agent
+
+agent = create_pandas_dataframe_agent(
+    llm=llm,
+    df=df,
+    verbose=True,
+    return_intermediate_steps=True,
+    allow_dangerous_code=True,  # Opt in only inside a sandbox or trusted environment.
+)
+
+# 4. Ask a natural language question
+response = agent.invoke({"input": "How many rows are in this file?"})
+print(response["output"])
+# Example: "There are 395 rows."
+
+# 5. Inspect the generated Python code
+for step in response["intermediate_steps"]:
+    print(step)
+# You may see code similar to:
+# len(df)
+
+# 6. Ask a filtered data question
+response = agent.invoke({"input": "How many students are 18 years old?"})
+print(response["output"])
+# Generated logic is conceptually similar to:
+count_18 = len(df[df["age"] == 18])
+print(count_18)
+
+# 7. Ask for a visualization
+response = agent.invoke({"input": "Plot the gender count with bars."})
+print(response["output"])
+# Generated code may be conceptually similar to:
+df["sex"].value_counts().plot(kind="bar")
+
+# 8. Safer manual equivalent for production-like workflows
+# Instead of letting the agent execute arbitrary code, explicitly write and review logic.
+gender_counts = df["sex"].value_counts()
+print(gender_counts)
+ax = gender_counts.plot(kind="bar", title="Student count by gender")
+ax.set_xlabel("Gender")
+ax.set_ylabel("Count")
+
+# 9. Recommended safety pattern
+# Use the agent only in a sandboxed environment.
+# Validate outputs manually before using them for decisions.
+question = "How many students are 18 years old?"
+response = agent.invoke({"input": question})
+print("Agent answer:", response["output"])
+# Human-verifiable check
+manual_check = len(df[df["age"] == 18])
+print("Manual check:", manual_check)
+```
+
+#### Exercise: Build Your Own Data Visualization Agent
+
+Notebook: [`06-Chat-with-your-dataframe-using-langchain-v1.ipynb`](./lab/06-Chat-with-your-dataframe-using-langchain-v1.ipynb)
+
+* Goal: build a conversational data visualization agent that answers natural-language questions over a CSV file and can generate charts from those questions.
+* Dataset: uses the UCI Student Alcohol Consumption mathematics dataset (`student-mat.csv`) loaded into a Pandas DataFrame.
+* Environment: loads `OPENAI_API_KEY` from the repository-level `.env` file using `python-dotenv`.
+* Model: uses `ChatOpenAI` through LangChain v1 instead of the original Watsonx model setup.
+* Agent: creates a Pandas DataFrame agent with `create_pandas_dataframe_agent`, enabling natural-language analysis over `df`.
+* Safety: opts in to `allow_dangerous_code=True` because the pandas agent executes Python code; this should be used only in a trusted local or sandboxed environment.
+* Interactions: asks row-count and filtering questions, then verifies simple answers with direct Pandas code.
+* Visualization tasks: prompts the agent to create bar charts, pie charts, box plots, and scatter plots for gender counts, alcohol consumption, free time, absences, and grades.
+* Debugging: inspects `response["intermediate_steps"]` to see the Python code generated by the LLM.
+* Exercises: asks you to generate plots for parental education vs grades, internet access vs grades, and absences vs final grades.
+
+```python
+from pathlib import Path
+import os
+import warnings
+
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain_experimental.agents import create_pandas_dataframe_agent
+import pandas as pd
+
+# Optional: suppress noisy warnings in the notebook.
+warnings.filterwarnings("ignore")
+
+# The notebook is in 01_Fundamentals/lab, so ../.. points to the repo root.
+load_dotenv(dotenv_path=Path("../..") / ".env")
+
+if not os.getenv("OPENAI_API_KEY"):
+    raise RuntimeError("OPENAI_API_KEY was not found. Add it to ../../.env.")
+
+# Load the CSV into a DataFrame.
+df = pd.read_csv("student-mat.csv")
+
+# Initialize the OpenAI chat model through LangChain v1.
+llm = ChatOpenAI(
+    model="gpt-4.1-mini",
+    temperature=0,
+    max_tokens=256,
+)
+
+# Create the pandas DataFrame agent.
+agent = create_pandas_dataframe_agent(
+    llm,
+    df,
+    verbose=False,
+    return_intermediate_steps=True,
+    handle_parsing_errors=True,
+    allow_dangerous_code=True,
+)
+
+# Ask questions about the data.
+response = agent.invoke({"input": "how many rows of data are in this file?"})
+print(response["output"])
+
+# Verify simple answers with Pandas.
+print(len(df))
+
+# Inspect generated Python code.
+print(response["intermediate_steps"][-1][0].tool_input.replace("; ", "\n"))
+
+# Ask for filtered data.
+response = agent.invoke({
+    "input": "Give me all the data where student's age is over 18 years old."
+})
+print(response["output"])
+
+# Ask for visualizations with natural language.
+response = agent.invoke({"input": "Generate a bar chart to plot the gender count."})
+print(response["intermediate_steps"][-1][0].tool_input.replace("; ", "\n"))
+
+response = agent.invoke({
+    "input": "Create box plots to analyze the relationship between freetime and G3."
+})
+print(response["output"])
+
+response = agent.invoke({
+    "input": (
+        "Generate scatter plots to examine the correlation between Dalc and G3, "
+        "and between Walc and G3."
+    )
+})
+print(response["output"])
+```
+
 ### Conversational Database Access
 
 ### Summary and Cheat Sheet: Built-In Agents in LangChain
-

@@ -10,6 +10,7 @@ jupyter
 jupyterlab
 langchain
 langchain-anthropic
+langchain-experimental
 langchain-ibm
 langchain-openai
 langchain-community
