@@ -80,6 +80,9 @@ Table of contents:
       - [From Natural Language to Data Visualization](#from-natural-language-to-data-visualization)
       - [Exercise: Build Your Own Data Visualization Agent](#exercise-build-your-own-data-visualization-agent)
     - [Conversational Database Access](#conversational-database-access)
+      - [Introduction to SQL Agents](#introduction-to-sql-agents)
+      - [Natural Language Interfaces for Data Systems](#natural-language-interfaces-for-data-systems)
+      - [Lab: Implementing LangChain's SQL Agent](#lab-implementing-langchains-sql-agent)
     - [Summary and Cheat Sheet: Built-In Agents in LangChain](#summary-and-cheat-sheet-built-in-agents-in-langchain)
 
 ## 1. Foundations of Tool Calling and Chaining
@@ -1564,7 +1567,7 @@ Notebook: [`05_Tool-Calling Agent-v1.ipynb`](./lab/05_Tool-Calling-v1.ipynb)
 - This notebook builds a YouTube-focused tool-calling agent that can search videos, extract video IDs, fetch transcripts, pull metadata, retrieve thumbnails, and rank search results by recency, views, or likes.
 - It starts by defining each capability as a LangChain tool with `@tool`, then adds those tools to a shared `tools` list and binds them to the chat model with `llm.bind_tools(tools)`.
 - It demonstrates manual tool calling first, so you can see the underlying mechanics: the LLM proposes a tool call, the application executes it, wraps the result in a `ToolMessage`, and sends that result back to the LLM.
-- It then builds a fixed-sequence summarization chain for a common workflow such as “summarize this YouTube video”, where the model typically needs to extract the video ID first and fetch the transcript second.
+- It then builds a fixed-sequence summarization chain for a common workflow such as "summarize this YouTube video", where the model typically needs to extract the video ID first and fetch the transcript second.
 - After that, it generalizes the approach into a recursive universal chain that keeps processing tool calls until the model stops requesting them.
 - This makes the notebook more flexible than a single hardcoded demo: the same chain can summarize one video, fetch metadata for ranked search results, or combine multiple tools in sequence depending on the query.
 - Compared with the earlier trending-page version, the notebook now uses `get_ranked_videos(...)` instead of scraping YouTube Trending, because the old Trending page is no longer reliable.
@@ -2140,5 +2143,143 @@ print(response["output"])
 ```
 
 ### Conversational Database Access
+
+SQL guide: [`mxagar/sql_guide`](https://github.com/mxagar/sql_guide)
+
+#### Introduction to SQL Agents
+
+* AI-powered SQL agents translate natural language into SQL, making data accessible without requiring SQL expertise.
+* Benefits:
+    * Lower barrier to data access for non-technical users.
+    * Faster querying and interpretation of databases.
+* Capabilities:
+    * Understand database schemas and select relevant tables.
+    * Generate SQL queries from natural language.
+    * Support multi-step queries for complex questions.
+    * Handle errors by analyzing failures and retrying with corrected queries.
+* Limitations:
+    * Possible misinterpretation of user intent.
+    * Complex queries may still require manual refinement.
+    * Require continuous testing and validation for reliability.
+* End-to-end workflow:
+    * User query (natural language)
+    * LLM generates SQL query
+    * Query executed via database connector
+    * Database returns raw data
+    * LLM processes and formats results
+    * Final answer returned in natural language
+* Key idea: SQL agents act as an interface between human language and databases, automating query generation and result interpretation while requiring oversight for accuracy.
+
+#### Natural Language Interfaces for Data Systems
+
+* Natural Language Interfaces (NLIs) allow users to query and analyze data using everyday language, removing the need for SQL or technical expertise and democratizing access to insights.
+* Evolution of interfaces:
+    * Command-line --> graphical tools --> dashboards --> natural language interfaces
+    * Shift from humans adapting to systems --> systems understanding human language.
+* End-to-end workflow:
+    * User query (natural language, often ambiguous)
+    * AI interprets intent and maps to schema (entities, metrics, operations)
+    * Generates structured query (SQL/API)
+    * Executes query and retrieves data
+    * Cleans and analyzes data (aggregations, patterns)
+    * Synthesizes insights and explanations
+    * Presents results (visualizations + natural language summaries)
+* Types of NLIs:
+    * One-shot:
+        * Single query, no context
+        * Simpler, faster, limited exploration
+    * Conversational:
+        * Multi-turn, context-aware
+        * Supports refinement and exploration
+        * More complex but more powerful
+* Key technologies:
+    * LLMs: intent understanding, language generation
+    * Semantic parsing / NER: extract entities and map to schema
+    * SQL generation: build correct and optimized queries
+    * Dialogue management: maintain context and control interaction flow
+* Design approaches:
+    * Rule-based: precise, domain-aware, but brittle
+    * ML/deep learning: robust to language variation, needs data
+    * Hybrid: combines both for better accuracy and adaptability
+* Applications:
+    * Business intelligence (KPIs, trends, segmentation)
+    * Data science (EDA, hypothesis testing)
+    * Enterprise systems (cross-domain data access)
+* Challenges:
+    * Ambiguity in natural language
+    * Mapping to complex schemas
+    * Handling advanced queries (joins, nested logic)
+    * Data security and governance constraints
+* Benchmarks:
+    * WikiSQL, Spider, SParC, CoSQL --> evaluate text-to-SQL systems
+* Future trends:
+    * Multimodal interaction (voice, visual)
+    * Autonomous insight generation
+    * Explainable AI for transparency and trust
+* Key idea: NLIs transform data access into a conversational process, enabling broader adoption while requiring robust handling of ambiguity, complexity, and security.
+
+#### Lab: Implementing LangChain's SQL Agent
+
+See [`lab/07_sql_agent_project/README.md`](./lab/07_sql_agent_project/README.md).
+
+* Project goal: build a natural-language SQL agent over the Chinook MySQL database.
+* Dataset: uses the Chinook media-store schema, including artists, albums, tracks, playlists, customers, employees, invoices, and invoice lines.
+* Database setup: load the already-downloaded [`chinook_mysql.sql`](./lab/07_sql_agent_project/chinook_mysql.sql) file into a local MySQL server and verify that `Album` contains 347 rows.
+* Environment: use the existing `agents` conda environment and repository-level [`requirements.in`](../requirements.in), not a separate project virtual environment.
+* Configuration: load `OPENAI_API_KEY`, optional OpenAI model settings, and MySQL connection variables from the repository-level `.env` file.
+* Model: [`llm_agent.py`](./lab/07_sql_agent_project/llm_agent.py) creates a `ChatOpenAI` model and provides a quick model smoke test.
+* Agent: [`sql_agent.py`](./lab/07_sql_agent_project/sql_agent.py) builds a `SQLDatabase` connection, creates a LangChain SQL agent, and accepts prompts from the command line with `--prompt`.
+* Notebook: [`07-test-sql-agent-connection.ipynb`](./lab/07_sql_agent_project/07-test-sql-agent-connection.ipynb) walks through `.env` loading, OpenAI model access, MySQL connection, direct SQL checks, and a final agent invocation.
+* Example questions: count albums or employees, describe `PlaylistTrack`, join `Artist` and `Album`, and find which country spent the most by invoice.
+* Safety: the agent executes model-generated SQL, so use a local training database or a read-only database user and verify important answers with direct SQL.
+
+```python
+from pathlib import Path
+from urllib.parse import quote_plus
+import os
+
+from dotenv import load_dotenv
+from langchain_classic.agents import AgentType
+from langchain_community.agent_toolkits import create_sql_agent
+from langchain_community.utilities.sql_database import SQLDatabase
+from langchain_openai import ChatOpenAI
+
+# Load repo-level .env from 01_Fundamentals/lab/07_sql_agent_project.
+project_root = Path(__file__).resolve().parents[3]
+load_dotenv(project_root / ".env")
+
+llm = ChatOpenAI(
+    model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+    temperature=float(os.getenv("OPENAI_TEMPERATURE", "0")),
+    max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "512")),
+)
+
+mysql_username = os.getenv("MYSQL_USERNAME", "root")
+mysql_password = os.getenv("MYSQL_PASSWORD", "")
+mysql_host = os.getenv("MYSQL_HOST", "localhost")
+mysql_port = os.getenv("MYSQL_PORT", "3306")
+database_name = os.getenv("MYSQL_DATABASE", "Chinook")
+
+mysql_uri = (
+    f"mysql+mysqlconnector://{quote_plus(mysql_username)}:"
+    f"{quote_plus(mysql_password)}@{mysql_host}:{mysql_port}/{database_name}"
+)
+db = SQLDatabase.from_uri(mysql_uri)
+
+agent_executor = create_sql_agent(
+    llm=llm,
+    db=db,
+    verbose=True,
+    handle_parsing_errors=True,
+    agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+)
+
+result = agent_executor.invoke({
+    "input": "Which country's customers spent the most by invoice?"
+})
+print(result["output"])
+```
+
+
 
 ### Summary and Cheat Sheet: Built-In Agents in LangChain

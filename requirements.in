@@ -10,6 +10,7 @@ jupyter
 jupyterlab
 langchain
 langchain-anthropic
+langchain-classic
 langchain-experimental
 langchain-ibm
 langchain-openai
@@ -19,6 +20,7 @@ langfuse
 langsmith
 matplotlib
 mcp
+mysql-connector-python
 numpy
 onnx
 onnxruntime
@@ -33,6 +35,7 @@ pytube
 safetensors
 scikit-learn
 seaborn
+sqlalchemy
 tensorboard
 tiktoken
 torch
