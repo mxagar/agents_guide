@@ -84,6 +84,13 @@ Table of contents:
       - [Natural Language Interfaces for Data Systems](#natural-language-interfaces-for-data-systems)
       - [Lab: Implementing LangChain's SQL Agent](#lab-implementing-langchains-sql-agent)
     - [Summary and Cheat Sheet: Built-In Agents in LangChain](#summary-and-cheat-sheet-built-in-agents-in-langchain)
+      - [1. Understanding built-in agents](#1-understanding-built-in-agents)
+      - [2. LangChain v1 default: `create_agent`](#2-langchain-v1-default-create_agent)
+      - [3. Legacy agent types and v1 equivalents](#3-legacy-agent-types-and-v1-equivalents)
+      - [4. Model compatibility](#4-model-compatibility)
+      - [5. Prebuilt task-specific agents](#5-prebuilt-task-specific-agents)
+      - [6. LangGraph agents](#6-langgraph-agents)
+      - [Key takeaways](#key-takeaways-2)
 
 ## 1. Foundations of Tool Calling and Chaining
 
@@ -2284,6 +2291,253 @@ result = agent_executor.invoke({
 print(result["output"])
 ```
 
-
-
 ### Summary and Cheat Sheet: Built-In Agents in LangChain
+
+#### 1. Understanding built-in agents
+
+LangChain agents let an LLM decide when to use tools, execute those tools, observe results, and continue until it can answer. In LangChain v1, the main built-in agent interface is `create_agent`, which returns a LangGraph-backed agent.
+
+There are two common ways to use built-in agent functionality:
+
+| Approach | Use when | Examples |
+| --- | --- | --- |
+| General-purpose agent | You have a model plus one or more tools and want the agent to choose actions dynamically. | `create_agent(...)` |
+| Task-specific utility | You want a shortcut for a common data workflow. | SQL toolkit tools, `create_sql_agent`, `create_pandas_dataframe_agent` |
+
+#### 2. LangChain v1 default: `create_agent`
+
+The old course material used `initialize_agent(..., agent=AgentType...)`. In LangChain v1, prefer `create_agent` from `langchain.agents`. You pass the model, tools, and optional `system_prompt`; LangChain handles the agent loop using LangGraph under the hood.
+
+```python
+# Requires: pip install -U langchain "langchain[openai]"
+from langchain.agents import create_agent
+
+
+def multiply(a: int, b: int) -> int:
+    """Multiply two integers."""
+    return a * b
+
+
+agent = create_agent(
+    model="openai:gpt-4.1-mini",
+    tools=[multiply],
+    system_prompt="You are a careful math assistant.",
+)
+
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "What is 12 times 9?"}]}
+)
+
+print(result["messages"][-1].content)
+```
+
+Use this pattern for most new agents: define clear tools with type hints and docstrings, pass them to `create_agent`, and invoke the agent with a chat-style `messages` input.
+
+#### 3. Legacy agent types and v1 equivalents
+
+The course cheat sheet lists older `AgentType` values. They are useful historically, but they are no longer the first choice for new LangChain v1 code.
+
+| Legacy agent type | Original purpose | LangChain v1 recommendation |
+| --- | --- | --- |
+| `ZERO_SHOT_REACT_DESCRIPTION` | ReAct-style reasoning using tool descriptions. | Use `create_agent(model, tools, ...)`. |
+| `REACT_DOCSTORE` | ReAct agent with document-store lookup. | Use `create_agent` with retriever/search tools, or build a RAG workflow. |
+| `SELF_ASK_WITH_SEARCH` | Break complex questions into subquestions and search. | Use `create_agent` with a search tool and an appropriate system prompt. |
+| `CONVERSATIONAL_REACT_DESCRIPTION` | ReAct agent with chat history. | Use `create_agent`; provide conversation history in `messages`, or add memory/checkpointing when needed. |
+| `CHAT_ZERO_SHOT_REACT_DESCRIPTION` | Chat-model zero-shot ReAct. | Use `create_agent`; v1 assumes chat-model style interactions. |
+| `CHAT_CONVERSATIONAL_REACT_DESCRIPTION` | Chat-model conversational ReAct. | Use `create_agent` with prior messages or persistent state. |
+| `STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION` | ReAct with structured multi-input tools. | Use `create_agent` with typed Python functions or `BaseTool` objects. |
+| `OPENAI_FUNCTIONS` | OpenAI function-calling agent. | Use `create_agent` with an OpenAI model; tool calling is handled by the model integration. |
+| `OPENAI_MULTI_FUNCTIONS` | OpenAI multi-function tool calling. | Use `create_agent` with multiple tools. |
+
+Legacy example from the course, updated to v1:
+
+```python
+from langchain.agents import create_agent
+
+
+def get_word_length(word: str) -> int:
+    """Return the number of characters in a word."""
+    return len(word)
+
+
+agent = create_agent(
+    model="openai:gpt-4.1-mini",
+    tools=[get_word_length],
+    system_prompt="Use tools when they help answer exactly.",
+)
+
+response = agent.invoke(
+    {"messages": [{"role": "user", "content": "How many letters are in LangChain?"}]}
+)
+
+print(response["messages"][-1].content)
+```
+
+#### 4. Model compatibility
+
+Tool-calling agents work best with chat models that support structured tool calls. If a model has weak tool-calling support, you may see parsing, validation, or missing-argument errors, especially with multi-argument tools or structured outputs.
+
+Practical tips:
+
+* Prefer current tool-calling chat models.
+* Give every tool precise type hints and a clear docstring.
+* Keep tool outputs simple and JSON-serializable.
+* Test the same agent with representative prompts before trusting it in a workflow.
+* Add human review, read-only credentials, or sandboxing for tools that can modify data or execute code.
+
+#### 5. Prebuilt task-specific agents
+
+Task-specific helpers still exist, but in v1 the general direction is to use `create_agent` plus the right toolkit/tools where possible.
+
+| Utility | Purpose | Current note |
+| --- | --- | --- |
+| `create_pandas_dataframe_agent()` | Natural language DataFrame analysis and visualization. | Lives in `langchain-experimental`; executes Python, so it requires `allow_dangerous_code=True`. |
+| `create_csv_agent()` | Natural language CSV querying. | Also experimental/community depending on version; consider loading CSV into Pandas and using explicit analysis code for safer workflows. |
+| `create_sql_agent()` | Natural language SQL querying. | Still available, but v1 docs also show building SQL agents with `SQLDatabaseToolkit` + `create_agent`. |
+| `create_openai_functions_agent()` | OpenAI function-calling tools. | Older constructor; prefer `create_agent` for new work. |
+| `create_tool_calling_agent()` | Generic structured tool-calling agent. | Older/lower-level constructor; prefer `create_agent` unless you need its specific runnable composition. |
+
+Pandas DataFrame agent example:
+
+```python
+# Requires:
+# pip install -U langchain langchain-openai langchain-experimental pandas tabulate
+import pandas as pd
+from langchain_experimental.agents import create_pandas_dataframe_agent
+from langchain_openai import ChatOpenAI
+
+df = pd.read_csv("student-mat.csv")
+
+llm = ChatOpenAI(
+    model="gpt-4.1-mini",
+    temperature=0,
+)
+
+agent = create_pandas_dataframe_agent(
+    llm=llm,
+    df=df,
+    verbose=True,
+    return_intermediate_steps=True,
+    allow_dangerous_code=True,  # Use only in a trusted sandbox.
+)
+
+response = agent.invoke(
+    {"input": "Generate a bar chart showing the count of students by sex."}
+)
+
+print(response["output"])
+print(response["intermediate_steps"])
+```
+
+SQL agent in the v1 style with `SQLDatabaseToolkit` and `create_agent`:
+
+```python
+# Requires:
+# pip install -U langchain "langchain[openai]" langchain-community sqlalchemy
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain_community.agent_toolkits import SQLDatabaseToolkit
+from langchain_community.utilities import SQLDatabase
+
+db = SQLDatabase.from_uri("sqlite:///Chinook.db")
+model = init_chat_model("openai:gpt-4.1-mini", temperature=0)
+
+toolkit = SQLDatabaseToolkit(db=db, llm=model)
+tools = toolkit.get_tools()
+
+system_prompt = f"""
+You are an agent designed to interact with a SQL database.
+Given an input question, create a syntactically correct {db.dialect} query,
+execute it, inspect the result, and return a concise answer.
+
+Unless the user specifies otherwise, limit queries to at most 5 rows.
+Never make DML statements such as INSERT, UPDATE, DELETE, or DROP.
+Always inspect the available tables before querying table contents.
+"""
+
+agent = create_agent(
+    model=model,
+    tools=tools,
+    system_prompt=system_prompt,
+)
+
+result = agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Which country's customers spent the most by invoice?",
+            }
+        ]
+    }
+)
+
+print(result["messages"][-1].content)
+```
+
+Classic SQL helper example:
+
+```python
+from langchain_community.agent_toolkits import create_sql_agent
+from langchain_community.utilities import SQLDatabase
+from langchain_openai import ChatOpenAI
+
+db = SQLDatabase.from_uri("sqlite:///Chinook.db")
+llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
+
+agent_executor = create_sql_agent(
+    llm=llm,
+    db=db,
+    verbose=True,
+    handle_parsing_errors=True,
+)
+
+result = agent_executor.invoke(
+    {"input": "How many artists are in the database?"}
+)
+
+print(result["output"])
+```
+
+#### 6. LangGraph agents
+
+LangChain v1 agents are built on LangGraph, so `create_agent` is already the recommended high-level way to get a graph-backed ReAct-style agent. Use LangGraph directly when you need lower-level control over graph nodes, conditional edges, persistence, human approval, or custom loops.
+
+Older examples may show `create_react_agent` from LangGraph. For new LangChain v1 code, start with `create_agent`; reach for LangGraph primitives only when the high-level agent interface is too constrained.
+
+```python
+from langchain.agents import create_agent
+
+
+def search_knowledge_base(query: str) -> str:
+    """Search the internal knowledge base for a short answer."""
+    examples = {
+        "refund policy": "Refunds are available within 30 days of purchase.",
+        "support hours": "Support is available Monday through Friday, 9:00-17:00.",
+    }
+    return examples.get(query.lower(), "No matching article found.")
+
+
+agent = create_agent(
+    model="openai:gpt-4.1-mini",
+    tools=[search_knowledge_base],
+    system_prompt=(
+        "You are a support agent. Use the knowledge-base tool before answering "
+        "policy or support-hour questions."
+    ),
+)
+
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "What is the refund policy?"}]}
+)
+
+print(result["messages"][-1].content)
+```
+
+#### Key takeaways
+
+* Yes: `create_agent` was missing from the old cheat sheet, and it is the main v1 agent constructor.
+* Treat `initialize_agent` and `AgentType` as legacy course-era concepts.
+* Use `create_agent` for general tool-using agents.
+* Use task-specific helpers only when they save real setup effort, and check whether they are experimental.
+* Be especially careful with Pandas and SQL agents because they execute generated code or queries.
