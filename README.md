@@ -13,6 +13,16 @@ Additionally, I have also taken notes from other courses/tutorials:
 - [Complete N8N and AI Automation Masterclass](https://www.udemy.com/course/complete-n8n/)
 - [AI Engineer Agentic Track: The Complete Agent & MCP Course](https://www.udemy.com/course/the-complete-agentic-ai-engineering-course/)
 
+<!--
+
+- Monitoring: LangSmith, LangFuse, etc.
+- [Vector Databases for RAG: An Introduction](https://www.coursera.org/learn/vector-databases-for-rag-an-introduction)
+- [Advanced RAG with Vector Databases and Retrievers](https://www.coursera.org/learn/advanced-rag-with-vector-databases-and-retrievers)
+- [Build Multimodal Generative AI Applications (Coursera, IBM)](https://www.coursera.org/learn/build-multimodal-generative-ai-applications)
+- [Build AI Agents using MCP](https://www.coursera.org/learn/build-ai-agents-using-mcp)
+
+-->
+
 Each course/module has its own subdirectory in this repository, where I have organized the notes and code examples.
 
 ## Setup
