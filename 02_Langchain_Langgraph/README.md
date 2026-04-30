@@ -19,6 +19,10 @@ Table of contents:
       - [Core Components of LangGraph](#core-components-of-langgraph)
       - [Designing Effective LangGraph Workflows](#designing-effective-langgraph-workflows)
       - [When to use LangGraph vs LangChain](#when-to-use-langgraph-vs-langchain)
+    - [Build a LangGraph Workflow](#build-a-langgraph-workflow)
+      - [LangGraph 101](#langgraph-101)
+      - [Exercise: Build a Stateful Workflow with LangGraph](#exercise-build-a-stateful-workflow-with-langgraph)
+    - [Summary and Cheat Sheet: Introduction to LangGraph](#summary-and-cheat-sheet-introduction-to-langgraph)
   - [2. Build Self-Improving Agents with LangGraph](#2-build-self-improving-agents-with-langgraph)
   - [3. Multi-Agent Systems and Agentic RAG with LangGraph](#3-multi-agent-systems-and-agentic-rag-with-langgraph)
 
@@ -169,7 +173,7 @@ class SupportAgentState(TypedDict):
     retry_count: int
 
 
-s# Node pattern: read state --> process --> update state
+# Node pattern: read state --> process --> update state
 def process_request(state: SupportAgentState) -> SupportAgentState:
     # example processing logic
     state["agent_response"] = f"Processing: {state['user_input']}"
@@ -256,6 +260,115 @@ def summarize(state: DocumentProcessingState) -> DocumentProcessingState:
   * LangChain is for **composing LLM pipelines**,
   * LangGraph is for **orchestrating stateful, adaptive agent systems**.
 
+### Build a LangGraph Workflow
+
+#### LangGraph 101
+
+* LangGraph models workflows as graphs with state, enabling looping, branching, and dynamic execution.
+* Core concepts:
+    * State: shared data (e.g., variables like n, letter) that evolves across steps.
+    * Nodes: functions that read state and return state updates or perform side effects.
+    * Edges: define transitions between nodes.
+    * `START` and `END`: explicit graph boundaries.
+* State is typically defined using `TypedDict` for structured, typed data.
+* Nodes usually return **partial state updates** (only changed fields); LangGraph merges those updates into the current state.
+* Reducers control how repeated updates are merged:
+    * default behavior replaces a state key
+    * `Annotated[..., reducer]` can append/merge values (e.g., `operator.add` for lists)
+    * chat workflows commonly use `MessagesState` or `add_messages` for message history
+* Workflow example:
+    * Initialize state (n=1, letter="")
+    * Increment n and generate a random letter
+    * Print values
+    * Loop until n >= 13, then stop
+* Conditional edges:
+    * Control flow based on state (e.g., continue loop or end).
+* Building a LangGraph app:
+    * Define state schema
+    * Create node functions
+    * Add nodes and edges
+    * Connect `START` to the first node and terminal paths to `END`
+    * Compile graph
+    * Run with `invoke(initial_state)` or `stream(initial_state)`
+* Persistence and long-running workflows:
+    * Compile with a checkpointer (e.g., `compile(checkpointer=...)`) to persist state.
+    * Use a `thread_id` in the run config to continue the same conversation/workflow later.
+    * Checkpoints enable human-in-the-loop interrupts, resume with `Command(resume=...)`, and time travel/debugging.
+* Advanced routing:
+    * `add_conditional_edges` routes based on state.
+    * `Command` can combine a state update with a routing or resume instruction.
+* Key idea: execution flows through nodes while state is updated and passed along, enabling dynamic, iterative workflows.
+
+```python
+# 1. Define state (shared memory)
+from typing import Literal
+from typing_extensions import TypedDict
+
+class ChainState(TypedDict):
+    n: int
+    letter: str
+
+# 2. Node: update state (increment + random letter)
+import random
+import string
+
+def add_node(state: ChainState) -> dict:
+    return {
+        "n": state["n"] + 1,
+        "letter": random.choice(string.ascii_lowercase)
+    }
+
+
+# 3. Node: side-effect (print state)
+def print_node(state: ChainState) -> dict:
+    print(f"n={state['n']}, letter={state['letter']}")
+    return {}  # no state update
+
+
+# 4. Conditional routing logic
+def should_continue(state: ChainState) -> Literal["add", "end"]:
+    if state["n"] >= 13:
+        return "end"
+    return "add"
+
+
+# 5. Build graph
+from langgraph.graph import StateGraph, START, END
+
+builder = StateGraph(ChainState)
+builder.add_node("add", add_node)
+builder.add_node("print", print_node)
+builder.add_edge(START, "add")
+builder.add_edge("add", "print")
+
+# conditional edge: after print --> either loop or end
+builder.add_conditional_edges(
+    "print",
+    should_continue,
+    {
+        "add": "add",
+        "end": END
+    }
+)
+
+app = builder.compile()
+
+
+# 6. Run workflow
+result = app.invoke({
+    "n": 1,
+    "letter": ""
+})
+
+print("Final state:", result)
+# Execution behavior:
+# add --> print --> (check condition)
+# --> loop until n >= 13 --> END
+```
+
+#### Exercise: Build a Stateful Workflow with LangGraph
+
+### Summary and Cheat Sheet: Introduction to LangGraph
 
 ## 2. Build Self-Improving Agents with LangGraph
 
