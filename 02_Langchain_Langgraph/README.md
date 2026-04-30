@@ -12,11 +12,250 @@ Table of contents:
 
 - [Building AI Agents and Agentic Workflows: Fundamentals of Building AI Agents](#building-ai-agents-and-agentic-workflows-fundamentals-of-building-ai-agents)
   - [1. Introduction to LangGraph](#1-introduction-to-langgraph)
+    - [Introduction to Agentic AI](#introduction-to-agentic-ai)
+      - [Generative AI vs Agentic AI](#generative-ai-vs-agentic-ai)
+      - [Agentic AI](#agentic-ai)
+    - [LangChain and LangGraph](#langchain-and-langgraph)
+      - [Core Components of LangGraph](#core-components-of-langgraph)
+      - [Designing Effective LangGraph Workflows](#designing-effective-langgraph-workflows)
+      - [When to use LangGraph vs LangChain](#when-to-use-langgraph-vs-langchain)
   - [2. Build Self-Improving Agents with LangGraph](#2-build-self-improving-agents-with-langgraph)
   - [3. Multi-Agent Systems and Agentic RAG with LangGraph](#3-multi-agent-systems-and-agentic-rag-with-langgraph)
 
 
 ## 1. Introduction to LangGraph
+
+### Introduction to Agentic AI
+
+#### Generative AI vs Agentic AI
+
+* Generative AI is reactive: it waits for a prompt and generates content (text, images, code, audio) based on learned patterns; it does not act beyond generation without further input.
+* Agentic AI is proactive: it uses a prompt to pursue goals through a loop of perception --> decision --> action --> feedback, with minimal human intervention.
+* Both often rely on LLMs:
+  * Generative AI uses them for content generation.
+  * Agentic AI uses them for reasoning (e.g., chain-of-thought to break tasks into steps).
+* Key difference:
+  * Generative AI --> produces possibilities; human directs and refines.
+  * Agentic AI --> executes multi-step tasks autonomously.
+* Use cases:
+  * Generative AI: content creation, scripting, media generation, assisted workflows.
+  * Agentic AI: task automation (e.g., shopping agents monitoring prices, handling purchases).
+* Agent behavior:
+  * Breaks complex tasks into steps (planning).
+  * Iteratively acts and adapts based on results.
+* Future direction:
+  * Hybrid systems combining both approaches:
+    * generation for exploration
+    * agentic execution for action
+* Key idea: generative AI "creates", agentic AI "acts"; the most powerful systems will integrate both.
+
+#### Agentic AI
+
+* The evolution of LLMs (e.g., after ChatGPT) moved from simple text generation to tool use, memory, and function calling, enabling the emergence of AI agents.
+* AI agents:
+  * Single autonomous entities designed for specific tasks.
+  * Capabilities: autonomy, task-specificity, and reactivity.
+  * Operate with a simple loop: perceive --> reason --> act.
+  * Use cases: chatbots, search assistants, email automation.
+* Agentic AI:
+  * Systems composed of multiple collaborating agents.
+  * Capabilities:
+    * Task decomposition (break goals into subtasks)
+    * Inter-agent communication
+    * Shared memory and learning
+    * Centralized or distributed orchestration
+  * Enables complex, multi-step, and parallel workflows.
+* Key differences:
+  * AI agent: single, linear, limited scope.
+  * Agentic AI: multi-agent, collaborative, adaptive, scalable.
+  * Agentic systems support iterative reasoning, planning, and re-planning.
+* Architectural advancements in Agentic AI:
+  * Multi-agent coordination via messaging/shared memory
+  * Advanced reasoning (ReAct, Chain-of-Thought, Tree-of-Thoughts)
+    * Chain-of-Thoughts: linear reasoning steps, internal monologue
+  * Persistent memory (episodic, semantic, vector-based)
+* Applications:
+  * AI agents: customer support, internal tools, automation
+  * Agentic AI: research assistants, robotics, healthcare systems, enterprise workflows
+* Challenges:
+  * AI agents: hallucinations, limited reasoning, weak long-horizon planning
+  * Agentic AI: coordination failures, error propagation, scalability, explainability
+* Emerging solutions:
+  * RAG for grounding and shared knowledge
+  * Tool/function calling for real-world interaction
+  * Advanced memory systems for long-term reasoning
+* Future trends:
+  * Agents becoming proactive, learning, and more capable
+  * Agentic AI evolving into coordinated multi-agent teams with governance
+* Tooling ecosystem:
+  * LangChain: building blocks for agents (tools, memory, chains)
+  * LangGraph: graph-based multi-agent workflows
+  * Other frameworks: CrewAI, AutoGen, etc.
+* Key idea: AI is evolving from single-task agents to coordinated multi-agent systems (Agentic AI) that can solve complex, real-world problems through collaboration, planning, and memory.
+
+![Agentic AI](./assets/agentic_ai.png)
+
+![Agentic AI Example](./assets/agentic_ai_example.png)
+
+### LangChain and LangGraph
+
+#### Core Components of LangGraph
+
+* LangGraph is a low-level framework (within the LangChain ecosystem) for building **stateful, multi-agent workflows** using graph structures.
+* Core primitives:
+  * Nodes: computation steps (functions).
+  * Edges: define execution flow between nodes.
+  * State: shared memory that persists context across the workflow.
+* Key capabilities:
+  * Looping and branching for dynamic decision-making.
+  * State persistence for long-running, context-aware interactions.
+  * Human-in-the-loop for manual intervention during execution.
+  * Time travel for debugging by reverting to previous states.
+* Advantages over traditional control flow (loops/conditionals):
+  * Explicit state management across steps.
+  * Runtime conditional transitions (dynamic branching).
+  * Modular design (independent, reusable nodes).
+  * Better observability and debugging of execution paths.
+* Use case:
+  * Ideal for complex agents requiring memory, adaptability, and multi-step reasoning (e.g., customer support agents that track context and escalate when needed).
+* Visualization:
+  * Workflows can be represented as graphs (e.g., Mermaid diagrams) to improve understanding and debugging.
+* Key idea: LangGraph replaces linear control flow with graph-based orchestration, enabling flexible, stateful, and inspectable AI agent workflows.
+
+![LangGraph Elements](./assets/langgraph_elements.png)
+
+![Graph Visualization](./assets/graph_visualization.png)
+
+#### Designing Effective LangGraph Workflows
+
+* Graph architecture (LangGraph) enables flexible, stateful workflows beyond traditional loops by supporting dynamic branching, clear visualization, and modular reusable components.
+* State design:
+  * Stores shared context across nodes.
+  * Use clear, descriptive names and keep structures flat.
+* Node design:
+  * Each node should have a single responsibility.
+  * Types: processing, validation, integration, decision.
+  * Nodes read from state, perform logic, and update state.
+* Edges:
+  * Control execution flow and enable conditional routing.
+* Error handling:
+  * Plan explicitly using retries, error states, and fallback/human intervention paths.
+* Testing/debugging:
+  * Test nodes independently.
+  * Ensure predictable state transitions.
+  * Build incrementally.
+* Performance:
+  * Keep state simple.
+  * isolate expensive operations.
+  * Use caching where needed.
+* Integration:
+  * Separate external system logic.
+  * handle failures and timeouts.
+  * design clear human-in-the-loop checkpoints.
+* Common pitfalls:
+  * oversized nodes
+  * complex nested state
+  * missing error handling
+* Key idea: design workflows as modular, state-driven graphs with clear responsibilities and robust error handling.
+
+```python
+# State design: clear, flat, explicit schema
+from typing import TypedDict
+
+class SupportAgentState(TypedDict):
+    user_input: str
+    agent_response: str
+    issue_type: str
+    retry_count: int
+
+
+s# Node pattern: read state --> process --> update state
+def process_request(state: SupportAgentState) -> SupportAgentState:
+    # example processing logic
+    state["agent_response"] = f"Processing: {state['user_input']}"
+    return state
+
+
+# Decision node: controls branching via edges
+def route_decision(state: SupportAgentState) -> str:
+    if state["retry_count"] > 2:
+        return "human_review"        # route to human node
+    elif state["issue_type"] == "resolved":
+        return "end_interaction"     # terminate workflow
+    else:
+        return "continue_processing" # loop or next step
+
+
+# Error handling pattern
+# can be combined with routing logic to escalate
+def error_handler(state: SupportAgentState) -> SupportAgentState:
+    # increment retry count and log error
+    state["retry_count"] += 1
+    return state
+
+
+# Example state for a document processing workflow
+from typing import TypedDict
+
+class DocumentProcessingState(TypedDict):
+    file_path: str
+    text_content: str
+    summary: str
+    analysis_results: dict
+
+# Example node sequence (conceptual pipeline)
+def extract_text(state: DocumentProcessingState) -> DocumentProcessingState:
+    # simulate extraction
+    state["text_content"] = "extracted text"
+    return state
+
+def analyze_text(state: DocumentProcessingState) -> DocumentProcessingState:
+    # simulate analysis
+    state["analysis_results"] = {"sentiment": "positive"}
+    return state
+
+def summarize(state: DocumentProcessingState) -> DocumentProcessingState:
+    # simulate summarization
+    state["summary"] = "short summary"
+    return state
+```
+
+#### When to use LangGraph vs LangChain
+
+* Both LangChain and LangGraph are open-source frameworks for building LLM-based applications, but they target different workflow complexities.
+* LangChain:
+  * Focus: building LLM applications via **sequential chains of operations**.
+  * Structure: chain (DAG) --> fixed, forward execution flow.
+  * Components: document loaders, text splitters, prompts, LLMs, memory, chains.
+  * State: limited; mainly passed forward or handled via memory components.
+  * Best for:
+    * linear workflows (retrieve --> summarize --> answer)
+    * well-defined pipelines with known steps.
+* LangGraph:
+  * Focus: **stateful, multi-agent systems** and complex workflows.
+  * Structure: graph --> nodes (actions), edges (transitions), state (shared memory).
+  * Supports loops, branching, and revisiting steps.
+  * State: central, persistent, and shared across all nodes.
+  * Best for:
+    * dynamic, interactive systems
+    * long-running, context-aware agents.
+* Key differences:
+  * Execution:
+    * LangChain --> linear, predefined flow.
+    * LangGraph --> dynamic, non-linear flow with loops.
+  * State:
+    * LangChain --> limited/passed along chain.
+    * LangGraph --> core shared memory across workflow.
+  * Complexity:
+    * LangChain --> simpler pipelines.
+    * LangGraph --> complex, adaptive multi-agent systems.
+* Example contrast:
+  * LangChain: retrieve data --> summarize --> answer (fixed sequence).
+  * LangGraph: task manager agent --> process input --> branch to add/complete/summarize tasks --> loop back with updated state.
+* Key idea:
+  * LangChain is for **composing LLM pipelines**,
+  * LangGraph is for **orchestrating stateful, adaptive agent systems**.
+
 
 ## 2. Build Self-Improving Agents with LangGraph
 
