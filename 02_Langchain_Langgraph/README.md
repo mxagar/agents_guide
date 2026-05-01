@@ -23,6 +23,11 @@ Table of contents:
       - [LangGraph 101](#langgraph-101)
       - [Exercise: Build a Stateful Workflow with LangGraph](#exercise-build-a-stateful-workflow-with-langgraph)
     - [Summary and Cheat Sheet: Introduction to LangGraph](#summary-and-cheat-sheet-introduction-to-langgraph)
+      - [Getting Started With LangGraph](#getting-started-with-langgraph)
+      - [Why Graph-Based Agents?](#why-graph-based-agents)
+      - [When To Use LangGraph](#when-to-use-langgraph)
+      - [Core Concepts](#core-concepts)
+      - [Complete Example: Increment Counter](#complete-example-increment-counter)
   - [2. Build Self-Improving Agents with LangGraph](#2-build-self-improving-agents-with-langgraph)
   - [3. Multi-Agent Systems and Agentic RAG with LangGraph](#3-multi-agent-systems-and-agentic-rag-with-langgraph)
 
@@ -585,6 +590,203 @@ qa_app.invoke({"question": "What is LangGraph?"})
 ```
 
 ### Summary and Cheat Sheet: Introduction to LangGraph
+
+LangGraph is an open-source framework for **stateful, graph-based AI agents**.
+
+* Extends LangChain with explicit control flow.
+* Uses shared state across workflow steps.
+* Supports branching, loops, persistence, human review, and debugging.
+* Works with LangChain models, tools, retrievers, and LangSmith.
+
+#### Getting Started With LangGraph
+
+| Topic | Summary |
+| --- | --- |
+| Overview | Build graph-shaped AI workflows. |
+| LangChain extension | Adds stateful orchestration to LangChain components. |
+| State | Shared `TypedDict` or Pydantic object. |
+| Flow | Branching, loops, retries, and routing. |
+| Agents | Iterative reasoning, tools, review, and coordination. |
+| Execution | Durable runs, checkpoints, resume, streaming. |
+| Observability | Graph diagrams and LangSmith traces. |
+
+Install:
+
+```bash
+pip install langgraph "langchain[openai]" python-dotenv
+```
+
+#### Why Graph-Based Agents?
+
+* Linear chains are good for fixed flows: retrieve, call model, parse, answer.
+* Agents often need loops: retry a tool, revise a query, or ask for approval.
+* LangGraph models workflows as state machines.
+* The graph can revisit nodes, branch by state, and stop only when a condition is met.
+* Example: poor retrieval -> rewrite query -> retrieve again -> evaluate -> answer.
+
+#### When To Use LangGraph
+
+| Use case | Why LangGraph helps |
+| --- | --- |
+| Loops | Repeat until a goal is met. |
+| Branching | Route with explicit if/else logic. |
+| Long runs | Persist and resume with checkpoints. |
+| Complex state | Keep workflow data in one shared object. |
+| Multi-agent flows | Coordinate agents, tools, or reviewers. |
+| Human review | Pause and resume with `Command(resume=...)`. |
+| Debugging | Inspect graph, state, streams, and traces. |
+
+#### Core Concepts
+
+| Concept | Explanation |
+| --- | --- |
+| State | Shared data passed between nodes. |
+| `StateGraph` | Blueprint for nodes, edges, and state. |
+| Nodes | Functions or `Runnable`s that return state updates. |
+| Edges | Fixed or conditional transitions. |
+| `START` / `END` | Special graph boundaries. |
+| `compile()` | Builds the runnable app. |
+| `invoke()` / `stream()` | Run the compiled graph. |
+| Checkpointers | Save state for resume and time travel. |
+| Reducers | Control how updates merge into state. |
+
+State and graph:
+
+```python
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+
+class WorkflowState(TypedDict):
+    user_query: str
+    summary: str
+    step_count: int
+
+graph = StateGraph(WorkflowState)
+```
+
+Define a node:
+
+```python
+def summarize(state: WorkflowState) -> dict:
+    text = state["user_query"]
+    summary = llm_summarize(text)
+
+    return {
+        "summary": summary,
+        "step_count": state["step_count"] + 1,
+    }
+
+graph.add_node("summarize", summarize)
+```
+
+Edges:
+
+```python
+graph.add_edge(START, "summarize")
+graph.add_edge("summarize", "finalize")
+graph.add_edge("finalize", END)
+```
+
+Conditional edges:
+
+```python
+from typing import Literal
+
+def decide(state: WorkflowState) -> Literal["repeat", "done"]:
+    if state["step_count"] < 2:
+        return "repeat"
+    return "done"
+
+graph.add_conditional_edges(
+    "summarize",
+    decide,
+    {
+        "repeat": "summarize",
+        "done": END,
+    },
+)
+```
+
+Run and visualize:
+
+```python
+app = graph.compile()
+final_state = app.invoke({
+    "user_query": "Hello",
+    "summary": "",
+    "step_count": 0,
+})
+print(app.get_graph().draw_mermaid())
+```
+
+Note: the routing function is **not** a node. It returns a label; the mapping chooses the destination.
+
+#### Complete Example: Increment Counter
+
+This graph increments `count` until it reaches `3`.
+
+```mermaid
+flowchart TD
+    START([START]) --> INCREMENT["increment\ncount += 1"]
+    INCREMENT --> DECIDE{"decide_next(state)"}
+    DECIDE -- "again" --> INCREMENT
+    DECIDE -- "finish" --> END([END])
+```
+
+```python
+from typing import Literal
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+
+class GraphState(TypedDict):
+    count: int
+    message: str
+
+def increment(state: GraphState) -> dict:
+    new_count = state["count"] + 1
+    return {
+        "count": new_count,
+        "message": f"Count is now {new_count}",
+    }
+
+def decide_next(state: GraphState) -> Literal["again", "finish"]:
+    if state["count"] < 3:
+        return "again"
+    return "finish"
+
+graph = StateGraph(GraphState)
+graph.add_node("increment", increment)
+
+graph.add_edge(START, "increment")
+graph.add_conditional_edges(
+    "increment",
+    decide_next,
+    {
+        "again": "increment",
+        "finish": END,
+    },
+)
+
+app = graph.compile()
+result = app.invoke({
+    "count": 0,
+    "message": "",
+})
+
+print(result)
+# {"count": 3, "message": "Count is now 3"}
+```
+
+Key takeaways:
+
+* Use LangGraph for state, branching, loops, retries, or durable execution.
+* State is the data; `StateGraph` is the structure.
+* Nodes return updates.
+* Edges move execution.
+* Conditional edges route at runtime.
+* `START` and `END` are special boundaries.
+* `compile()` builds the app; `invoke()` or `stream()` runs it.
+* Mermaid and LangSmith help debug behavior.
 
 ## 2. Build Self-Improving Agents with LangGraph
 
