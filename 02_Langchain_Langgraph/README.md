@@ -276,11 +276,11 @@ def summarize(state: DocumentProcessingState) -> DocumentProcessingState:
     * default behavior replaces a state key
     * `Annotated[..., reducer]` can append/merge values (e.g., `operator.add` for lists)
     * chat workflows commonly use `MessagesState` or `add_messages` for message history
-* Workflow example:
-    * Initialize state (n=1, letter="")
-    * Increment n and generate a random letter
+* Workflow example (below):
+    * Initialize state `(n=1, letter="")`
+    * Increment `n` and generate a random letter
     * Print values
-    * Loop until n >= 13, then stop
+    * Loop until `n >= 13`, then stop
 * Conditional edges:
     * Control flow based on state (e.g., continue loop or end).
 * Building a LangGraph app:
@@ -299,16 +299,33 @@ def summarize(state: DocumentProcessingState) -> DocumentProcessingState:
     * `Command` can combine a state update with a routing or resume instruction.
 * Key idea: execution flows through nodes while state is updated and passed along, enabling dynamic, iterative workflows.
 
+In the following, this graph is created:
+
+```mermaid
+flowchart TD
+    START([START]) --> ADD["add_node\nincrement n\ngenerate random letter"]
+    ADD --> PRINT["print_node\nprint current state"]
+    PRINT --> ROUTE{"should_continue(state)"}
+    ROUTE -- "n < 13" --> ADD
+    ROUTE -- "n >= 13" --> END([END])
+```
+
 ```python
-# 1. Define state (shared memory)
+# 1. Define the graph state.
+# Every node receives this state as input. A node can then return updates
+# for one or more keys, and LangGraph merges those updates into the state.
 from typing import Literal
 from typing_extensions import TypedDict
 
 class ChainState(TypedDict):
+    # Counter used to decide when the loop should stop.
     n: int
+    # Latest generated letter. This is replaced on every "add" node run.
     letter: str
 
-# 2. Node: update state (increment + random letter)
+# 2. Define a node that updates state.
+# This node does not need to return the full state. It returns only the
+# fields that changed: n and letter.
 import random
 import string
 
@@ -319,42 +336,54 @@ def add_node(state: ChainState) -> dict:
     }
 
 
-# 3. Node: side-effect (print state)
+# 3. Define a node that performs a side effect.
+# It reads the current state and prints it. Since it does not change state,
+# it returns an empty update.
 def print_node(state: ChainState) -> dict:
     print(f"n={state['n']}, letter={state['letter']}")
     return {}  # no state update
 
 
-# 4. Conditional routing logic
+# 4. Define conditional routing logic.
+# After "print" runs, LangGraph calls this function with the latest state.
+# The returned label is mapped to the next graph destination below.
 def should_continue(state: ChainState) -> Literal["add", "end"]:
     if state["n"] >= 13:
         return "end"
     return "add"
 
 
-# 5. Build graph
+# 5. Build the graph.
+# START is the explicit graph entry boundary, and END is the explicit
+# terminal boundary. The graph loops from "print" back to "add" until the
+# conditional route returns "end".
 from langgraph.graph import StateGraph, START, END
 
-builder = StateGraph(ChainState)
-builder.add_node("add", add_node)
-builder.add_node("print", print_node)
-builder.add_edge(START, "add")
-builder.add_edge("add", "print")
+workflow = StateGraph(ChainState)
+workflow.add_node("add", add_node)
+workflow.add_node("print", print_node)
+workflow.add_edge(START, "add")  # Entry point
+workflow.add_edge("add", "print")
 
-# conditional edge: after print --> either loop or end
-builder.add_conditional_edges(
-    "print",
-    should_continue,
-    {
+# Conditional edge: after print --> either loop or end
+# this mapping translates labels into graph destinations
+# Note: should_continue is not a node, but a routing function attached to conditional edges
+workflow.add_conditional_edges(
+    "print",  # 1. source node
+    should_continue,  # 2. routing function
+    {  # 3. routing map: outputs from should_continue are mapped to these nodes
         "add": "add",
         "end": END
     }
 )
 
-app = builder.compile()
+# compile() validates the graph and produces a runnable app.
+app = workflow.compile()
 
 
-# 6. Run workflow
+# 6. Run the workflow.
+# The initial_state starts with n=1 and an empty letter. The first node run
+# increments n to 2, generates a letter, prints it, and then the loop repeats.
 result = app.invoke({
     "n": 1,
     "letter": ""
@@ -364,9 +393,196 @@ print("Final state:", result)
 # Execution behavior:
 # add --> print --> (check condition)
 # --> loop until n >= 13 --> END
+#
+# Example state evolution:
+# initial state: {"n": 1, "letter": ""}
+# after add_node: {"n": 2, "letter": "q"}  # random letter
+# after print_node: {"n": 2, "letter": "q"}  # unchanged
+# should_continue returns "add" because n < 13
+# after add_node: {"n": 3, "letter": "m"}
+# after print_node: {"n": 3, "letter": "m"}
+# ...
+# after add_node: {"n": 13, "letter": "x"}
+# after print_node: {"n": 13, "letter": "x"}
+# should_continue returns "end" because n >= 13
+# final state: {"n": 13, "letter": "x"}
 ```
 
 #### Exercise: Build a Stateful Workflow with LangGraph
+
+Notebook: [`lab/01_LangGraph101-v1.ipynb`](./lab/01_LangGraph101-v1.ipynb).
+
+This lab introduces LangGraph by building stateful workflows from small, explicit pieces:
+
+* Setup:
+    * installs current `langgraph`, `langchain[openai]`, and `python-dotenv`
+    * loads `OPENAI_API_KEY` from `.env`
+    * creates an OpenAI chat model with `init_chat_model`
+* LangGraph basics:
+    * defines typed state with `TypedDict`
+    * creates node functions that read state and return partial updates
+    * connects nodes with normal edges and conditional edges
+    * uses explicit `START` and `END` graph boundaries
+* Example 1: Authentication workflow:
+    * collects username/password input
+    * validates credentials (it looks for exact password)
+    * routes to success or failure with a conditional edge
+    * loops back to the input node after failed authentication
+* Example 2: QA workflow:
+    * validates a user question (looking for keywords)
+    * adds LangGraph-specific context when the question is relevant
+    * calls an OpenAI model to answer from the provided context
+    * returns a fallback answer when no context is available
+* Final exercise:
+    * builds a small looping counter graph
+    * increments `n`, generates a random letter, prints state, and loops until `n >= 13`
+    * reinforces the modern `START -> node -> ... -> END` style
+
+Example 1: authentication workflow:
+
+```mermaid
+flowchart TD
+    START([START]) --> INPUT["InputNode\ncollect username/password"]
+    INPUT --> VALIDATE["ValidateCredential\ncheck credentials"]
+    VALIDATE --> ROUTER{"router(state)"}
+    ROUTER -- "authenticated" --> SUCCESS["Success\nwrite success output"]
+    ROUTER -- "not authenticated" --> FAILURE["Failure\nwrite failure output"]
+    FAILURE --> INPUT
+    SUCCESS --> END([END])
+```
+
+Code summary:
+
+```python
+class AuthState(TypedDict):
+    username: Optional[str]
+    password: Optional[str]
+    is_authenticated: Optional[bool]
+    output: Optional[str]
+
+def input_node(state):
+    if state.get("username", "") == "":
+        username = input("What is your username?")
+    else:
+        username = state["username"]
+
+    password = input("Enter your password: ")
+    return {
+        "username": username,
+        "password": password,
+    }
+
+def validate_credentials_node(state):
+    username = state.get("username", "")
+    password = state.get("password", "")
+    return {
+        "is_authenticated": (
+            username == "test_user" and password == "secure_password"
+        )
+    }
+
+def success_node(state):
+    return {"output": "Authentication successful! Welcome."}
+
+def failure_node(state):
+    return {"output": "Not successful, please try again!"}
+
+def router(state):
+    if state["is_authenticated"]:
+        return "success_node"
+    return "failure_node"
+
+workflow = StateGraph(AuthState)
+workflow.add_node("InputNode", input_node)
+workflow.add_node("ValidateCredential", validate_credentials_node)
+workflow.add_node("Success", success_node)
+workflow.add_node("Failure", failure_node)
+
+workflow.add_edge(START, "InputNode")
+workflow.add_edge("InputNode", "ValidateCredential")
+workflow.add_conditional_edges(
+    "ValidateCredential",
+    router,
+    {
+        "success_node": "Success",
+        "failure_node": "Failure",
+    },
+)
+workflow.add_edge("Success", END)
+workflow.add_edge("Failure", "InputNode")
+
+app = workflow.compile()
+result = app.invoke({"username": "test_user"})
+```
+
+Example 2: QA workflow:
+
+```mermaid
+flowchart TD
+    START([START]) --> INPUT["InputNode\nvalidate question"]
+    INPUT --> CONTEXT["ContextNode\nadd context if relevant"]
+    CONTEXT --> QA["QANode\nanswer with OpenAI model\nor fallback if no context"]
+    QA --> END([END])
+```
+
+Code summary:
+
+```python
+class QAState(TypedDict):
+    question: Optional[str]
+    valid: Optional[bool]
+    error: Optional[str]
+    context: Optional[str]
+    answer: Optional[str]
+
+def input_validation_node(state):
+    question = state.get("question", "").strip()
+    if not question:
+        return {
+            "valid": False,
+            "error": "Question cannot be empty.",
+        }
+    return {"valid": True, "error": None}
+
+def context_provider_node(state):
+    question = state.get("question", "").lower()
+    if "langgraph" in question or "guided project" in question:
+        return {
+            "context": (
+                "This guided project is about using LangGraph, a Python "
+                "library to design state-based workflows. LangGraph connects "
+                "modular nodes with normal and conditional edges."
+            )
+        }
+    return {"context": None}
+
+def llm_qa_node(state):
+    question = state.get("question", "")
+    context = state.get("context")
+
+    if not context:
+        return {"answer": "I don't have enough context to answer your question."}
+
+    messages = [
+        {"role": "system", "content": "Answer using only the provided context."},
+        {"role": "user", "content": f"Context: {context}\n\nQuestion: {question}"},
+    ]
+    response = qa_llm.invoke(messages)
+    return {"answer": response.content.strip()}
+
+qa_workflow = StateGraph(QAState)
+qa_workflow.add_node("InputNode", input_validation_node)
+qa_workflow.add_node("ContextNode", context_provider_node)
+qa_workflow.add_node("QANode", llm_qa_node)
+
+qa_workflow.add_edge(START, "InputNode")
+qa_workflow.add_edge("InputNode", "ContextNode")
+qa_workflow.add_edge("ContextNode", "QANode")
+qa_workflow.add_edge("QANode", END)
+
+qa_app = qa_workflow.compile()
+qa_app.invoke({"question": "What is LangGraph?"})
+```
 
 ### Summary and Cheat Sheet: Introduction to LangGraph
 
