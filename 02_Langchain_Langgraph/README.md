@@ -29,6 +29,13 @@ Table of contents:
       - [Core Concepts](#core-concepts)
       - [Complete Example: Increment Counter](#complete-example-increment-counter)
   - [2. Build Self-Improving Agents with LangGraph](#2-build-self-improving-agents-with-langgraph)
+    - [Build Reflection Agents](#build-reflection-agents)
+      - [Overview: Type of Agents](#overview-type-of-agents)
+      - [Building Reflection Agents with LangGraph](#building-reflection-agents-with-langgraph)
+      - [Exercise: Build a Reflection Agent with LangGraph](#exercise-build-a-reflection-agent-with-langgraph)
+    - [Advanced Self-Reflection Agents](#advanced-self-reflection-agents)
+    - [ReAct: Reasoning + Action](#react-reasoning--action)
+    - [Summary and Cheat Sheet: Build Self-Improving Agents with LangGraph](#summary-and-cheat-sheet-build-self-improving-agents-with-langgraph)
   - [3. Multi-Agent Systems and Agentic RAG with LangGraph](#3-multi-agent-systems-and-agentic-rag-with-langgraph)
 
 
@@ -789,5 +796,201 @@ Key takeaways:
 * Mermaid and LangSmith help debug behavior.
 
 ## 2. Build Self-Improving Agents with LangGraph
+
+### Build Reflection Agents
+
+#### Overview: Type of Agents
+
+* AI agents are classified by how they make decisions and interact with their environment, ranging from simple rule-based systems to adaptive learning systems.
+* Five main types of agents:
+    * Simple reflex agents: it *reacts*
+        * Use condition–action rules (if --> then).
+          * Percept environment with sensors, match conditions, execute actions.
+        * No memory or history.
+        * Work well in predictable environments.
+        * Limitation: fail in dynamic or unseen situations.
+    * Model-based reflex agents: it *remembers*
+        * Maintain an internal state (memory of the world).
+        * Track how the environment evolves and how actions affect it.
+        * Still reactive (no planning), but more robust than simple reflex agents.
+    * Goal-based agents: it *aims*
+        * It builds on the model-based agent by adding a goal or objective to achieve.
+        * Make decisions based on achieving a goal.
+          * Internal question: which action will lead me closer to the goal?
+        * Simulate future outcomes of actions.
+        * Choose actions that lead toward the goal.
+        * Limitation: any solution meeting the goal is acceptable (no quality ranking).
+    * Utility-based agents: it *evaluates*
+        * Extend goal-based agents by optimizing for the best outcome.
+          * A goal is a binary condition (achieved/not achieved), while utility is a measure of desirability.
+        * Use a utility function to evaluate desirability (e.g., speed, cost, safety).
+        * Select actions that maximize overall utility.
+    * Learning agents: the most adaptable and powerful type. It *improves*.
+        * Improve over time through experience and feedback.
+        * Components:
+            * performance element (acts)
+            * critic (evaluates outcome, provides feedback/reward)
+            * learning element (updates strategy)
+            * problem generator (explores new actions)
+        * Most powerful but data-intensive and slower to train.
+* Key progression:
+    * reflex --> remembers --> plans --> optimizes --> learns
+* Multi-agent systems: That's what we want usually to improve performance and capabilities.
+    * Combine multiple agents working together in a shared environment.
+    * Enable more complex, collaborative problem-solving.
+* Key idea:
+    * Agent sophistication increases from fixed rules to adaptive learning, but real-world systems often combine multiple agent types and still benefit from human oversight.
+
+![Learning Agent](./assets/learning_agent.png)
+
+#### Building Reflection Agents with LangGraph
+
+* Reflection agents improve outputs through an iterative feedback loop:
+    * Generator produces an initial response.
+    * Reflector critiques it.
+    * Generator refines based on feedback.
+    * Loop repeats for several iterations.
+* Two roles:
+    * Generator: creates content.
+    * Reflector: evaluates and suggests improvements.
+* State:
+    * Maintains full conversation history across iterations.
+    * Each iteration adds messages (input, outputs, critiques).
+* Implementation:
+    * Use LangChain for prompt + LLM chains.
+    * Use LangGraph for workflow orchestration.
+* LangGraph setup:
+    * State = `MessagesState`, which stores and appends conversation messages.
+    * Nodes:
+        * generate --> produces output
+        * reflect --> critiques output
+    * Edges:
+        * START --> generate
+        * reflect --> generate
+    * Conditional routing:
+        * after generate, either stop or go to reflect.
+* Key idea:
+    * Reflection agents simulate “self-critique”, improving quality over multiple passes.
+
+![Reflection Agent Example](./assets/reflection_agent_example.png)
+
+![Reflection Agent Exercise](./assets/reflection_agent_exercise.png)
+
+![Reflection Agent Exercise Continued](./assets/reflection_agent_exercise_2.png)
+
+Example graph flow:
+
+```mermaid
+flowchart TD
+    START([START]) --> GENERATE["generate\ncreate or revise content"]
+    GENERATE --> ROUTER{"should_continue(state)"}
+    ROUTER -- "enough iterations" --> END([END])
+    ROUTER -- "continue" --> REFLECT["reflect\ncritique latest draft"]
+    REFLECT --> GENERATE
+```
+
+```python
+# 1. Generator and reflector chains (LangChain)
+import os
+from dotenv import load_dotenv
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.chat_models import init_chat_model
+
+load_dotenv()
+
+if not os.getenv("OPENAI_API_KEY"):
+    raise ValueError("OPENAI_API_KEY is not set.")
+
+llm = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-5-nano"),
+    model_provider="openai",
+)
+
+# Generator prompt
+generation_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful content creator. Create a high-quality post."),
+    MessagesPlaceholder(variable_name="messages")
+])
+generate_chain = generation_prompt | llm  # pipe operator builds chain
+
+# Reflector prompt
+reflect_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a critical reviewer. Give feedback."),
+    MessagesPlaceholder(variable_name="messages")
+])
+reflect_chain = reflect_prompt | llm
+
+
+# 2. LangGraph nodes
+from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.graph import MessagesState
+
+def generate_node(state: MessagesState) -> dict:
+    # Generate content based on full conversation history.
+    response = generate_chain.invoke({"messages": state["messages"]})
+    return {"messages": [AIMessage(content=response.content)]}
+
+def reflect_node(state: MessagesState) -> dict:
+    # Critique the latest AI draft.
+    critique = reflect_chain.invoke({"messages": state["messages"]})
+    # Wrap the critique as HumanMessage so the generator treats it as feedback.
+    return {"messages": [HumanMessage(content=critique.content)]}
+
+
+# 3. Build LangGraph workflow
+# MessagesState is a built-in state schema with a "messages" key.
+# LangGraph appends returned messages instead of replacing the history.
+from typing import Literal
+from langgraph.graph import StateGraph, START, END
+
+graph = StateGraph(MessagesState)
+graph.add_node("generate", generate_node)
+graph.add_node("reflect", reflect_node)
+
+# Flow: START --> generate --> reflect --> generate ...
+graph.add_edge(START, "generate")
+graph.add_edge("reflect", "generate")
+
+# Routing function: stop after several messages, otherwise critique.
+def should_continue(state: MessagesState) -> Literal["reflect", END]:
+    if len(state["messages"]) > 6:
+        return END
+    return "reflect"
+
+graph.add_conditional_edges("generate", should_continue)
+app = graph.compile()
+
+
+# 4. Run reflection agent
+initial_state = {
+    "messages": [
+        HumanMessage(
+            content="Write a LinkedIn post about getting a dev job under 160 chars"
+        )
+    ]
+}
+
+result = app.invoke(initial_state)
+
+# final refined output
+print(result["messages"][-1].content)
+# Execution pattern:
+# Human --> generate --> reflect --> generate --> reflect --> ... --> END
+# Each loop improves the output
+```
+
+#### Exercise: Build a Reflection Agent with LangGraph
+
+### Advanced Self-Reflection Agents
+
+
+
+### ReAct: Reasoning + Action
+
+
+
+### Summary and Cheat Sheet: Build Self-Improving Agents with LangGraph
+
+
 
 ## 3. Multi-Agent Systems and Agentic RAG with LangGraph
