@@ -33,7 +33,18 @@ Table of contents:
       - [Overview: Type of Agents](#overview-type-of-agents)
       - [Building Reflection Agents with LangGraph](#building-reflection-agents-with-langgraph)
       - [Exercise: Build a Reflection Agent with LangGraph](#exercise-build-a-reflection-agent-with-langgraph)
-    - [Advanced Self-Reflection Agents](#advanced-self-reflection-agents)
+    - [Advanced Self-Reflexion Agents](#advanced-self-reflexion-agents)
+      - [Structuring LLM Tool Calls with Pydantic and JSON Serialization](#structuring-llm-tool-calls-with-pydantic-and-json-serialization)
+        - [Why This Matters](#why-this-matters)
+        - [Real Example: Addition Tool With Pydantic](#real-example-addition-tool-with-pydantic)
+        - [Why Use Pydantic Models for Tool Calls?](#why-use-pydantic-models-for-tool-calls)
+        - [Reusable Math Tool Schemas](#reusable-math-tool-schemas)
+        - [What Does `Literal` Do?](#what-does-literal-do)
+        - [Why JSON-Serializable Pydantic Models Are Powerful](#why-json-serializable-pydantic-models-are-powerful)
+        - [Final Thoughts and Alternatives](#final-thoughts-and-alternatives)
+      - [Understanding Reflexion Agents](#understanding-reflexion-agents)
+      - [Building Reflexion Agents](#building-reflexion-agents)
+      - [Exercise: Building a Reflexion Agent with External Knowledge Integration](#exercise-building-a-reflexion-agent-with-external-knowledge-integration)
     - [ReAct: Reasoning + Action](#react-reasoning--action)
     - [Summary and Cheat Sheet: Build Self-Improving Agents with LangGraph](#summary-and-cheat-sheet-build-self-improving-agents-with-langgraph)
   - [3. Multi-Agent Systems and Agentic RAG with LangGraph](#3-multi-agent-systems-and-agentic-rag-with-langgraph)
@@ -1083,11 +1094,259 @@ response = workflow.invoke({
 print(response["messages"][-1].content)
 ```
 
+### Advanced Self-Reflexion Agents
+
+#### Structuring LLM Tool Calls with Pydantic and JSON Serialization
+
+LLMs can produce free-form text, but real applications often need structured data that can be passed to APIs, databases, tools, or downstream functions.
+
+* Tool binding lets the model extract arguments for a function-like schema.
+* Pydantic models define that schema in Python.
+* The model output becomes predictable, typed, validated, and JSON-serializable.
+* This is useful for agentic workflows where LLM output becomes another system's input.
+
+##### Why This Matters
+
+Example: a weather API may expect:
+
+* `condition`: weather condition, such as `sunny`, `rainy`, or `cloudy`
+* `temperature`: integer value
+* `unit`: `celsius` or `fahrenheit`
+
+You can express that contract as a Pydantic model:
+
+```python
+from pydantic import BaseModel, Field
+
+class WeatherSchema(BaseModel):
+    """Weather information extracted from user text."""
+
+    condition: str = Field(
+        description="Weather condition such as sunny, rainy, cloudy"
+    )
+    temperature: int = Field(description="Temperature value")
+    unit: str = Field(
+        description="Temperature unit such as fahrenheit or celsius"
+    )
+```
+
+Bind the schema as a tool:
+
+```python
+from langchain.chat_models import init_chat_model
+
+llm = init_chat_model("gpt-5-nano", model_provider="openai")
+weather_llm = llm.bind_tools([WeatherSchema])
+
+response = weather_llm.invoke("It's sunny and 75 degrees")
+
+print(response.tool_calls[0]["args"])
+# {"condition": "sunny", "temperature": 75, "unit": "fahrenheit"}
+```
+
+The tool call arguments are a dictionary of key-value pairs that can be validated, transformed, or passed to a real weather API.
+
+Another conceptual example: spam detection.
+
+```python
+class SpamSchema(BaseModel):
+    """Classify whether an email is spam."""
+
+    classification: str = Field(description="Email classification: spam or not_spam")
+    confidence: float = Field(description="Confidence score between 0 and 1")
+    reason: str = Field(description="Reason for the classification")
+
+spam_llm = llm.bind_tools([SpamSchema])
+response = spam_llm.invoke("I'm a Nigerian prince, you want to be rich")
+
+print(response.tool_calls[0]["args"])
+# {
+#   "classification": "spam",
+#   "confidence": 0.95,
+#   "reason": "Nigerian prince scam"
+# }
+```
+
+These are conceptual examples. The exact output depends on the model and prompt, but the schema gives the model a structured target.
+
+##### Real Example: Addition Tool With Pydantic
+
+In a real workflow, this pattern could extract flight-booking fields such as origin, destination, date, and time before calling an API. A smaller example is addition: the model extracts two numbers, and Python performs the actual calculation.
+
+```python
+from pydantic import BaseModel, Field
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage
+
+class Add(BaseModel):
+    """Add two numbers together."""
+
+    a: int = Field(description="First number")
+    b: int = Field(description="Second number")
+
+llm = init_chat_model("gpt-5-nano", model_provider="openai")
+initial_chain = llm.bind_tools([Add])
+
+question = "add 1 and 10"
+response = initial_chain.invoke([HumanMessage(content=question)])
+
+def extract_and_add(response) -> int:
+    tool_call = response.tool_calls[0]
+    args = tool_call["args"]
+    return args["a"] + args["b"]
+
+result = extract_and_add(response)
+
+print(
+    f"LLM extracted: a={response.tool_calls[0]['args']['a']}, "
+    f"b={response.tool_calls[0]['args']['b']}"
+)
+print(f"Result: {result}")
+```
+
+Key point:
+
+* The LLM does **extraction and tool selection**.
+* Your code performs the deterministic operation.
+* The schema makes the handoff reliable.
+
+##### Why Use Pydantic Models for Tool Calls?
+
+In tool-augmented LLM applications, inputs and outputs should be:
+
+* structured
+* validated
+* easy to serialize as JSON
+* easy to deserialize from JSON
+* reusable across tools
+
+Pydantic provides runtime validation, type hints, helpful errors, and JSON serialization.
+
+##### Reusable Math Tool Schemas
+
+```python
+from typing import Literal
+from pydantic import BaseModel
+
+class TwoOperands(BaseModel):
+    a: float
+    b: float
+
+class AddInput(TwoOperands):
+    operation: Literal["add"]
+
+class SubtractInput(TwoOperands):
+    operation: Literal["subtract"]
+
+class MathToolRequest(TwoOperands):
+    operation: Literal["add", "subtract"]
+
+class MathOutput(BaseModel):
+    result: float
+```
+
+Tool functions can accept and return Pydantic models:
+
+```python
+def add_tool(data: AddInput) -> MathOutput:
+    return MathOutput(result=data.a + data.b)
+
+def subtract_tool(data: SubtractInput) -> MathOutput:
+    return MathOutput(result=data.a - data.b)
+```
+
+Dispatch from JSON input:
+
+```python
+incoming_json = '{"a": 7, "b": 3, "operation": "subtract"}'
+
+def dispatch_tool(json_payload: str) -> str:
+    # Pydantic v2: parse and validate raw JSON.
+    request = MathToolRequest.model_validate_json(json_payload)
+
+    if request.operation == "add":
+        output = add_tool(AddInput.model_validate_json(json_payload))
+    elif request.operation == "subtract":
+        output = subtract_tool(SubtractInput.model_validate_json(json_payload))
+    else:
+        raise ValueError("Unsupported operation")
+
+    # Pydantic v2: serialize model to JSON.
+    return output.model_dump_json()
+
+result_json = dispatch_tool(incoming_json)
+print(result_json)
+# {"result":4.0}
+```
+
+`MathToolRequest` validates the shared fields and allowed operation. The operation-specific model then validates the exact tool payload.
+
+##### What Does `Literal` Do?
+
+`Literal` restricts a field to specific constant values. This prevents unsupported operations from reaching your tool logic.
+
+```python
+from typing import Literal
+from pydantic import BaseModel, Field
+
+class CalculatorSchema(BaseModel):
+    operation: Literal["add", "subtract", "multiply", "divide"] = Field(
+        description="The mathematical operation to perform"
+    )
+    a: float = Field(description="First number")
+    b: float = Field(description="Second number")
+
+calculator_llm = llm.bind_tools([CalculatorSchema])
+
+response = calculator_llm.invoke("Add 15 and 23")
+print(response.tool_calls[0]["args"])
+# {"operation": "add", "a": 15.0, "b": 23.0}
+
+response = calculator_llm.invoke("Multiply 7 by 8")
+print(response.tool_calls[0]["args"])
+# {"operation": "multiply", "a": 7.0, "b": 8.0}
+```
+
+##### Why JSON-Serializable Pydantic Models Are Powerful
+
+| Feature | Benefit |
+| --- | --- |
+| Type validation | Rejects malformed inputs early. |
+| Reusability | Share base schemas across tools. |
+| JSON serialization | Use `model_dump_json()` for APIs and storage. |
+| JSON parsing | Use `model_validate_json()` for incoming payloads. |
+| Extensibility | Add tools such as multiply or divide easily. |
+| Testability | Validate tool behavior without an LLM. |
+
+##### Final Thoughts and Alternatives
+
+Pydantic schemas make LLM applications:
+
+* more robust
+* easier to test
+* easier to maintain
+* safer to connect to APIs and databases
+* easier to orchestrate in LangChain, LangGraph, CrewAI, and similar frameworks
+
+Python `dataclasses` can also define lightweight data containers. However, Pydantic is usually preferred for LLM tool calls because it provides:
+
+* runtime validation
+* field descriptions for tool schemas
+* JSON parsing and serialization
+* custom validators
+* strong integration with LangChain, FastAPI, and other Python frameworks
+
+Key idea: Pydantic turns model output from “some text” into a typed contract your software can trust.
+
+#### Understanding Reflexion Agents
 
 
 
+#### Building Reflexion Agents
 
-### Advanced Self-Reflection Agents
+
+
+#### Exercise: Building a Reflexion Agent with External Knowledge Integration
 
 
 
