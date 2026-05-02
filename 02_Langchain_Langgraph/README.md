@@ -934,6 +934,7 @@ def reflect_node(state: MessagesState) -> dict:
     # Critique the latest AI draft.
     critique = reflect_chain.invoke({"messages": state["messages"]})
     # Wrap the critique as HumanMessage so the generator treats it as feedback.
+    # NOTE: There is no human input in reality, but this is the way to feed the critique back into the generator chain.
     return {"messages": [HumanMessage(content=critique.content)]}
 
 
@@ -980,6 +981,111 @@ print(result["messages"][-1].content)
 ```
 
 #### Exercise: Build a Reflection Agent with LangGraph
+
+Notebook: [`lab/02_Tweet-Reflection-Agent-v1.ipynb`](./lab/02_Tweet-Reflection-Agent-v1.ipynb).
+
+This notebook implements the reflection agent as explained in the previous section:
+
+* Setup:
+    * installs current `langgraph`, `langchain[openai]`, and `python-dotenv`
+    * loads `OPENAI_API_KEY` and optional `OPENAI_MODEL` from `.env`
+    * initializes an OpenAI chat model with `init_chat_model`
+* Reflection workflow:
+    * builds a LinkedIn post generator prompt
+    * builds a critique prompt for content strategy feedback
+    * chains each prompt to the same OpenAI model
+* LangGraph implementation:
+    * uses `StateGraph(MessagesState)` instead of the older `MessageGraph`
+    * defines `generate` and `reflect` nodes
+    * returns partial message updates with `{"messages": [...]}`
+    * starts with `START -> generate`
+    * loops `reflect -> generate`
+    * uses `add_conditional_edges` after `generate` to stop at `END`
+* Execution:
+    * invokes the graph with an initial `HumanMessage`
+    * inspects the first draft, first critique, and final revised post
+    * renders the graph as Mermaid with `draw_mermaid()`
+
+Important code (in the notebook the prompts are more detailed):
+
+```python
+import os
+from typing import Literal
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langgraph.graph import END, START, MessagesState, StateGraph
+
+load_dotenv()
+
+if not os.getenv("OPENAI_API_KEY"):
+    raise ValueError("OPENAI_API_KEY is not set.")
+
+llm = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-5-nano"),
+    model_provider="openai",
+)
+
+generation_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are a professional LinkedIn content assistant. Generate the "
+        "best LinkedIn post possible. If feedback is provided, revise the "
+        "previous draft.",
+    ),
+    MessagesPlaceholder(variable_name="messages"),
+])
+generate_chain = generation_prompt | llm
+
+reflection_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are a professional LinkedIn content strategist. Critique the "
+        "post and provide actionable feedback for the next revision.",
+    ),
+    MessagesPlaceholder(variable_name="messages"),
+])
+reflect_chain = reflection_prompt | llm
+
+def generation_node(state: MessagesState) -> dict:
+    generated_post = generate_chain.invoke({"messages": state["messages"]})
+    return {"messages": [AIMessage(content=generated_post.content)]}
+
+def reflection_node(state: MessagesState) -> dict:
+    critique = reflect_chain.invoke({"messages": state["messages"]})
+    return {"messages": [HumanMessage(content=critique.content)]}
+
+def should_continue(state: MessagesState) -> Literal["reflect", END]:
+    if len(state["messages"]) > 6:
+        return END
+    return "reflect"
+
+graph = StateGraph(MessagesState)
+graph.add_node("generate", generation_node)
+graph.add_node("reflect", reflection_node)
+
+graph.add_edge(START, "generate")
+graph.add_edge("reflect", "generate")
+graph.add_conditional_edges("generate", should_continue)
+
+workflow = graph.compile()
+
+response = workflow.invoke({
+    "messages": [
+        HumanMessage(
+            content="Write a LinkedIn post about getting a software developer job under 160 characters"
+        )
+    ]
+})
+
+print(response["messages"][-1].content)
+```
+
+
+
+
 
 ### Advanced Self-Reflection Agents
 
