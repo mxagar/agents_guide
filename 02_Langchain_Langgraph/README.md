@@ -1381,6 +1381,7 @@ Key idea: Pydantic turns model output from "some text" into a typed contract you
 * Setup:
     * Configure a search tool (e.g., Tavily) to retrieve external data.
     * Initialize an LLM with `init_chat_model`.
+    * Define system prompts for the responder and revisor personas.
     * Load API keys from `.env` (`OPENAI_API_KEY`, and `TAVILY_API_KEY` if using Tavily).
     * Install provider packages such as `langchain-tavily` when using Tavily.
 * Structured outputs:
@@ -1435,7 +1436,7 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_tavily import TavilySearch
 from langgraph.graph import END, START, MessagesState, StateGraph
 from pydantic import BaseModel, Field
@@ -1450,7 +1451,35 @@ llm = init_chat_model(
 search_tool = TavilySearch(max_results=5, topic="general")
 
 
-# 2. Define structured output schemas
+# 2. Define agent personas / system prompts
+responder_system_prompt = """\
+You are a careful research assistant.
+
+Your job:
+- answer the user's question with the best information you currently have
+- critique your own answer
+- identify missing information and unsupported claims
+- propose search queries that would verify or improve the answer
+
+Do not pretend to have external evidence yet. If evidence is needed, add
+search queries. Keep the draft answer concise and practical.
+"""
+
+revisor_system_prompt = """\
+You are a rigorous answer revisor.
+
+Your job:
+- use the previous draft, self-critique, and tool results
+- revise the answer so it is more accurate and better supported
+- remove unsupported or superfluous claims
+- include citations as URLs when tool results provide them
+- propose more search queries only if another revision would materially help
+
+Prefer clear, actionable, evidence-backed answers.
+"""
+
+
+# 3. Define structured output schemas
 
 class Reflection(BaseModel):
     missing: str = Field(description="Important missing information")
@@ -1467,14 +1496,16 @@ class ReviseAnswer(AnswerQuestion):
     citations: list[str] = Field(description="URLs supporting the revised answer")
 
 
-# 3. Bind schemas as model tools
+# 4. Bind schemas as model tools
 responder_chain = llm.bind_tools([AnswerQuestion])
 revisor_chain = llm.bind_tools([ReviseAnswer])
 
 
-# 4. LangGraph nodes
+# 5. LangGraph nodes
 def respond_node(state: MessagesState) -> dict:
-    response = responder_chain.invoke(state["messages"])
+    response = responder_chain.invoke(
+        [SystemMessage(content=responder_system_prompt)] + state["messages"]
+    )
     return {"messages": [response]}
 
 def execute_tools(state: MessagesState) -> dict:
@@ -1497,11 +1528,13 @@ def execute_tools(state: MessagesState) -> dict:
     }
 
 def revise_node(state: MessagesState) -> dict:
-    response = revisor_chain.invoke(state["messages"])
+    response = revisor_chain.invoke(
+        [SystemMessage(content=revisor_system_prompt)] + state["messages"]
+    )
     return {"messages": [response]}
 
 
-# 5. LangGraph workflow
+# 6. LangGraph workflow
 graph = StateGraph(MessagesState)
 graph.add_node("respond", respond_node)
 graph.add_node("tools", execute_tools)
@@ -1520,7 +1553,7 @@ graph.add_conditional_edges("revise", should_continue)
 app = graph.compile()
 
 
-# 6. Run Reflexion agent
+# 7. Run Reflexion agent
 result = app.invoke({
     "messages": [
         HumanMessage(content="I'm pre-diabetic and need to lower blood sugar")
@@ -1538,6 +1571,155 @@ print(final_tool_call["args"]["citations"])
 ```
 
 #### Exercise: Building a Reflexion Agent with External Knowledge Integration
+
+Notebook: [`lab/03_Reflexion Agent-v1.ipynb`](./lab/03_Reflexion%20Agent-v1.ipynb)
+
+This notebook builds a Reflexion-style research agent that critiques, searches, and revises its own answer:
+
+* Setup:
+    * installs current `langgraph`, `langchain[openai]`, `langchain-tavily`, and `python-dotenv`
+    * loads `OPENAI_API_KEY`, optional `OPENAI_MODEL`, and `TAVILY_API_KEY` from `.env`
+    * initializes an OpenAI chat model with `init_chat_model`
+    * initializes Tavily search with `TavilySearch`
+* Prompting:
+    * defines a responder persona for drafting, self-critiquing, and proposing searches
+    * defines a revisor persona for using search results, removing unsupported claims, and adding citations
+* Structured outputs:
+    * uses Pydantic models for `Reflection`, `AnswerQuestion`, and `ReviseAnswer`
+    * binds those schemas as tools so model outputs have predictable fields
+* Tool execution:
+    * extracts `search_queries` from the model tool call
+    * runs Tavily searches
+    * returns results as `ToolMessage` objects with `tool_call_id`
+* LangGraph workflow:
+    * uses `StateGraph(MessagesState)`
+    * starts with `START -> respond`
+    * runs `respond -> execute_tools -> revisor`
+    * loops `revisor -> execute_tools` until `MAX_ITERATIONS`
+    * renders the graph as Mermaid
+
+Example: diet recommendation agent::
+
+```mermaid
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	respond(respond)
+	execute_tools(execute_tools)
+	revisor(revisor)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> respond;
+	execute_tools --> revisor;
+	respond --> execute_tools;
+	revisor -.-> __end__;
+	revisor -.-> execute_tools;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+
+Code highlights:
+
+```python
+import json
+import os
+from typing import Literal
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_tavily import TavilySearch
+from langgraph.graph import END, START, MessagesState, StateGraph
+from pydantic import BaseModel, Field
+
+load_dotenv()
+
+llm = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-5-nano"),
+    model_provider="openai",
+)
+tavily_tool = TavilySearch(max_results=3, topic="general")
+
+responder_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Draft an answer, critique it, and propose search queries."),
+    MessagesPlaceholder(variable_name="messages"),
+])
+revisor_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Revise using critique and tool results. Include citations."),
+    MessagesPlaceholder(variable_name="messages"),
+])
+
+class Reflection(BaseModel):
+    missing: str = Field(description="Important missing information")
+    superfluous: str = Field(description="Unnecessary or unsupported information")
+
+class AnswerQuestion(BaseModel):
+    answer: str
+    reflection: Reflection
+    search_queries: list[str]
+
+class ReviseAnswer(AnswerQuestion):
+    citations: list[str]
+
+initial_chain = responder_prompt | llm.bind_tools([AnswerQuestion])
+revisor_chain = revisor_prompt | llm.bind_tools([ReviseAnswer])
+
+def execute_tools(state: MessagesState) -> dict:
+    last_ai_message = state["messages"][-1]
+    tool_messages = []
+
+    for tool_call in last_ai_message.tool_calls:
+        query_results = {}
+        for query in tool_call["args"].get("search_queries", []):
+            query_results[query] = tavily_tool.invoke(query)
+
+        tool_messages.append(
+            ToolMessage(
+                content=json.dumps(query_results, default=str),
+                tool_call_id=tool_call["id"],
+                name=tool_call["name"],
+            )
+        )
+
+    return {"messages": tool_messages}
+
+MAX_ITERATIONS = 4
+
+def event_loop(state: MessagesState) -> Literal["execute_tools", END]:
+    tool_visits = sum(
+        isinstance(message, ToolMessage)
+        for message in state["messages"]
+    )
+    if tool_visits >= MAX_ITERATIONS:
+        return END
+    return "execute_tools"
+
+graph = StateGraph(MessagesState)
+graph.add_node("respond", lambda state: {
+    "messages": [initial_chain.invoke({"messages": state["messages"]})]
+})
+graph.add_node("execute_tools", execute_tools)
+graph.add_node("revisor", lambda state: {
+    "messages": [revisor_chain.invoke({"messages": state["messages"]})]
+})
+
+graph.add_edge(START, "respond")
+graph.add_edge("respond", "execute_tools")
+graph.add_edge("execute_tools", "revisor")
+graph.add_conditional_edges("revisor", event_loop)
+
+app = graph.compile()
+
+responses = app.invoke({
+    "messages": [
+        HumanMessage(
+            content="I'm pre-diabetic and have heart issues. What breakfast foods should I eat and avoid?"
+        )
+    ]
+})
+
+final_answer = responses["messages"][-1].tool_calls[0]["args"]["answer"]
+```
 
 
 
