@@ -42,7 +42,7 @@ Table of contents:
         - [What Does `Literal` Do?](#what-does-literal-do)
         - [Why JSON-Serializable Pydantic Models Are Powerful](#why-json-serializable-pydantic-models-are-powerful)
         - [Final Thoughts and Alternatives](#final-thoughts-and-alternatives)
-      - [Understanding Reflexion Agents](#understanding-reflexion-agents)
+      - [Understanding Reflexion Agents: Reflection + Tools + Real-Time Data + Verifiable Outputs](#understanding-reflexion-agents-reflection--tools--real-time-data--verifiable-outputs)
       - [Building Reflexion Agents](#building-reflexion-agents)
       - [Exercise: Building a Reflexion Agent with External Knowledge Integration](#exercise-building-a-reflexion-agent-with-external-knowledge-integration)
     - [ReAct: Reasoning + Action](#react-reasoning--action)
@@ -881,7 +881,7 @@ Key takeaways:
     * Conditional routing:
         * after generate, either stop or go to reflect.
 * Key idea:
-    * Reflection agents simulate “self-critique”, improving quality over multiple passes.
+    * Reflection agents simulate "self-critique", improving quality over multiple passes.
 
 ![Reflection Agent Example](./assets/reflection_agent_example.png)
 
@@ -1336,15 +1336,206 @@ Python `dataclasses` can also define lightweight data containers. However, Pydan
 * custom validators
 * strong integration with LangChain, FastAPI, and other Python frameworks
 
-Key idea: Pydantic turns model output from “some text” into a typed contract your software can trust.
+Key idea: Pydantic turns model output from "some text" into a typed contract your software can trust.
 
-#### Understanding Reflexion Agents
+#### Understanding Reflexion Agents: Reflection + Tools + Real-Time Data + Verifiable Outputs
 
-
+* Reflexion agents extend reflection agents by adding tool use, real-time data, and verifiable outputs (citations).
+* Core loop:
+    * Generator (responder) creates an initial answer.
+    * Self-critique identifies weaknesses.
+    * Tool (e.g., web search) retrieves external information.
+    * Revisor refines the response using critique + tool outputs.
+    * Loop repeats for multiple iterations.
+* Key capabilities:
+    * Continuous self-improvement across iterations.
+    * Detection and correction of errors in prior outputs.
+    * Integration of up-to-date external data (post-training knowledge).
+    * Transparent outputs with citations and references.
+* Structured outputs:
+    * Responses are not plain text but follow a schema, a kind of a dict/table; example initial query: "I need more minerals in my diet"
+      * response: "you can get more minerals by eating rocks"
+      * self-critique: "this is not a good answer because humans can't eat rocks"
+      * queries: "what are good dietary sources of minerals?"
+        * for each query, tool(s) return results (content + URLs); in this case we have a search tool
+      * references (created by the revisor by using the tool results)
+    * Enables clear separation between reasoning, tool inputs, and final answers.
+* Workflow:
+    * User query --> responder outputs structured response + search query
+    * Tool executes query --> returns results (content, URLs)
+    * Revisor updates response using critique + tool data + references
+    * Repeat until stopping condition
+* State:
+    * Maintained as a list (e.g., response_list) containing:
+        * original query
+        * generated responses
+        * critiques
+        * tool outputs
+        * revised responses
+* Key idea:
+    * Reflexion agents combine self-critique + external knowledge + structured reasoning to produce more accurate, grounded, and explainable results than standard reflection agents.
 
 #### Building Reflexion Agents
 
+* Reflexion agents are built by combining LLM generation, self-critique, tool use (search), and iterative revision using structured schemas.
+* Setup:
+    * Configure a search tool (e.g., Tavily) to retrieve external data.
+    * Initialize an LLM with `init_chat_model`.
+    * Load API keys from `.env` (`OPENAI_API_KEY`, and `TAVILY_API_KEY` if using Tavily).
+    * Install provider packages such as `langchain-tavily` when using Tavily.
+* Structured outputs:
+    * Define schemas (e.g., AnswerQuestion, Reflection) to enforce fields like:
+        * answer
+        * critique (missing / superfluous)
+        * search queries
+        * citations (for revised outputs)
+    * LLM outputs structured objects instead of plain text.
+* Workflow:
+    * Responder node:
+        * Generates initial answer + critique + search queries.
+    * Tool node:
+        * Executes search queries and returns results.
+    * Revisor node:
+        * Improves answer using critique + tool results + citations.
+    * Loop:
+        * Repeat tools --> revisor until iteration limit.
+* State:
+    * Maintained with `MessagesState`, which appends:
+        * user query
+        * AI responses
+        * tool outputs
+        * revisions
+* LangGraph orchestration:
+    * Nodes: responder, tool executor, revisor.
+    * Edges: `START -> respond -> tools -> revise`.
+    * Loop: `revise -> tools` until `END`.
+    * Conditional routing controls iteration count.
+* Key idea:
+    * Reflexion agents produce higher-quality, evidence-backed answers by combining structured reasoning, external knowledge, and iterative self-improvement.
 
+Example graph flow:
+
+```mermaid
+flowchart TD
+    START([START]) --> RESPOND["respond\ninitial answer + critique\nsearch queries"]
+    RESPOND --> TOOLS["tools\nrun Tavily searches"]
+    TOOLS --> REVISE["revise\nimprove answer\nadd citations"]
+    REVISE --> ROUTER{"should_continue(state)"}
+    ROUTER -- "continue" --> TOOLS
+    ROUTER -- "iteration limit" --> END([END])
+```
+
+```python
+# pip install -U langgraph langchain langchain-openai langchain-tavily python-dotenv
+# We need to create a Tavily account + TAVILY_API_KEY
+
+# 1. Setup model + search tool
+import os
+from typing import Literal
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_tavily import TavilySearch
+from langgraph.graph import END, START, MessagesState, StateGraph
+from pydantic import BaseModel, Field
+
+load_dotenv()
+
+llm = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-5-nano"),
+    model_provider="openai",
+)
+
+search_tool = TavilySearch(max_results=5, topic="general")
+
+
+# 2. Define structured output schemas
+
+class Reflection(BaseModel):
+    missing: str = Field(description="Important missing information")
+    superfluous: str = Field(description="Unnecessary or unsupported information")
+
+class AnswerQuestion(BaseModel):
+    answer: str = Field(description="Draft answer to the user's question")
+    reflection: Reflection = Field(description="Self-critique of the answer")
+    search_queries: list[str] = Field(
+        description="Search queries for external verification"
+    )
+
+class ReviseAnswer(AnswerQuestion):
+    citations: list[str] = Field(description="URLs supporting the revised answer")
+
+
+# 3. Bind schemas as model tools
+responder_chain = llm.bind_tools([AnswerQuestion])
+revisor_chain = llm.bind_tools([ReviseAnswer])
+
+
+# 4. LangGraph nodes
+def respond_node(state: MessagesState) -> dict:
+    response = responder_chain.invoke(state["messages"])
+    return {"messages": [response]}
+
+def execute_tools(state: MessagesState) -> dict:
+    last_ai_msg = state["messages"][-1]
+    tool_call = last_ai_msg.tool_calls[0]
+    queries = tool_call["args"]["search_queries"]
+
+    tool_results = []
+    for query in queries:
+        tool_results.append(search_tool.invoke(query))
+
+    return {
+        "messages": [
+            ToolMessage(
+                content=str(tool_results),
+                tool_call_id=tool_call["id"],
+                name=tool_call["name"],
+            )
+        ]
+    }
+
+def revise_node(state: MessagesState) -> dict:
+    response = revisor_chain.invoke(state["messages"])
+    return {"messages": [response]}
+
+
+# 5. LangGraph workflow
+graph = StateGraph(MessagesState)
+graph.add_node("respond", respond_node)
+graph.add_node("tools", execute_tools)
+graph.add_node("revise", revise_node)
+
+graph.add_edge(START, "respond")
+graph.add_edge("respond", "tools")
+graph.add_edge("tools", "revise")
+
+def should_continue(state: MessagesState) -> Literal["tools", END]:
+    if len(state["messages"]) > 6:
+        return END
+    return "tools"
+
+graph.add_conditional_edges("revise", should_continue)
+app = graph.compile()
+
+
+# 6. Run Reflexion agent
+result = app.invoke({
+    "messages": [
+        HumanMessage(content="I'm pre-diabetic and need to lower blood sugar")
+    ]
+})
+
+# Final revised answer is stored in the final AIMessage tool call.
+final_tool_call = result["messages"][-1].tool_calls[0]
+print(final_tool_call["args"]["answer"])
+print(final_tool_call["args"]["citations"])
+
+# Execution pattern:
+# Human --> respond --> tools --> revise --> tools --> revise --> END
+# Each iteration improves answer using critique + external data
+```
 
 #### Exercise: Building a Reflexion Agent with External Knowledge Integration
 
