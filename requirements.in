@@ -15,6 +15,7 @@ langchain-experimental
 langchain-ibm
 langchain-openai
 langchain-community
+langchain-tavily
 langgraph
 langfuse
 langsmith
