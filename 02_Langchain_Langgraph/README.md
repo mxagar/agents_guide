@@ -46,6 +46,8 @@ Table of contents:
       - [Building Reflexion Agents](#building-reflexion-agents)
       - [Exercise: Building a Reflexion Agent with External Knowledge Integration](#exercise-building-a-reflexion-agent-with-external-knowledge-integration)
     - [ReAct: Reasoning + Action](#react-reasoning--action)
+      - [Building Agents that Reason before Acting](#building-agents-that-reason-before-acting)
+      - [Exercise: Build a ReAct Agent with LangGraph](#exercise-build-a-react-agent-with-langgraph)
     - [Summary and Cheat Sheet: Build Self-Improving Agents with LangGraph](#summary-and-cheat-sheet-build-self-improving-agents-with-langgraph)
   - [3. Multi-Agent Systems and Agentic RAG with LangGraph](#3-multi-agent-systems-and-agentic-rag-with-langgraph)
 
@@ -1721,11 +1723,124 @@ responses = app.invoke({
 final_answer = responses["messages"][-1].tool_calls[0]["args"]["answer"]
 ```
 
-
-
 ### ReAct: Reasoning + Action
 
+#### Building Agents that Reason before Acting
 
+* ReAct agents combine reasoning + tool use in an iterative loop to solve complex tasks step by step.
+* Core pattern:
+    * Thought --> reasoning about next step
+    * Action --> select tool
+    * Action Input --> input to tool
+    * Observation --> tool result
+    * Final Answer --> response after all steps
+* Workflow:
+    * LLM reasons, calls tools, receives observations, and continues reasoning until no more tool calls are needed.
+* Key idea:
+    * Observations feed back into reasoning, enabling multi-step problem solving.
+* Use case example:
+    * Query: “What’s the weather and what should I wear?”
+    * Agent:
+        * calls weather tool
+        * uses result to call clothing tool
+        * produces final answer
+* Implementation (LangGraph):
+    * State: list of messages (conversation + tool outputs)
+    * Nodes:
+        * agent node (LLM reasoning)
+        * tools node (execute tool calls)
+    * Conditional routing:
+        * if tool call --> go to tools node
+        * else --> end
+* Loop continues until final answer is generated.
+
+
+```python
+# 1. Define tools
+from langchain_community.tools import TavilySearchResults
+from langchain_core.tools import tool
+
+search = TavilySearchResults()
+
+@tool
+def recommend_clothing(weather: str) -> str:
+    """Recommend clothing based on weather description."""
+    if "rain" in weather.lower():
+        return "Wear a raincoat and waterproof shoes."
+    if "sunny" in weather.lower():
+        return "Wear light clothes like a t-shirt and sunglasses."
+    return "Wear comfortable everyday clothing."
+
+
+# 2. Define state (message history)
+from typing import TypedDict, Sequence
+from langchain_core.messages import BaseMessage
+
+class AgentState(TypedDict):
+    messages: Sequence[BaseMessage]
+
+
+# 3. Build agent (LLM + tools)
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI()
+tools = [search, recommend_clothing]
+tool_map = {t.name: t for t in tools}
+
+def call_model(state):
+    # LLM processes full message history (scratchpad)
+    response = llm.invoke(state["messages"])
+    return {"messages": state["messages"] + [response]}
+
+
+# 4. Tool execution node
+from langchain_core.messages import ToolMessage
+
+def tool_node(state):
+    last_msg = state["messages"][-1]
+    tool_call = last_msg.tool_calls[0]
+    tool = tool_map[tool_call["name"]]
+    result = tool.invoke(tool_call["args"])
+    return {
+        "messages": state["messages"] + [ToolMessage(content=str(result))]
+    }
+
+
+# 5. Conditional routing
+from langgraph.graph import StateGraph, END
+
+def should_continue(state):
+    last_msg = state["messages"][-1]
+    if not getattr(last_msg, "tool_calls", None):
+        return END
+    return "tools"
+
+
+# 6. Build graph
+graph = StateGraph(AgentState)
+graph.add_node("agent", call_model)
+graph.add_node("tools", tool_node)
+graph.add_edge("agent", "tools")
+graph.add_conditional_edges("agent", should_continue)
+graph.add_edge("tools", "agent")
+graph.set_entry_point("agent")
+app = graph.compile()
+
+
+# 7. Run agent
+from langchain_core.messages import HumanMessage
+
+result = app.invoke({
+    "messages": [HumanMessage(content="What's the weather in Zurich and what should I wear?")]
+})
+
+# final answer
+print(result["messages"][-1].content)
+# Execution loop:
+# Human --> agent (Thought/Action) --> tools (Observation) --> agent --> ... --> END
+```
+
+#### Exercise: Build a ReAct Agent with LangGraph
 
 ### Summary and Cheat Sheet: Build Self-Improving Agents with LangGraph
 
