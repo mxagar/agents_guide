@@ -1739,13 +1739,13 @@ final_answer = responses["messages"][-1].tool_calls[0]["args"]["answer"]
 * Key idea:
     * Observations feed back into reasoning, enabling multi-step problem solving.
 * Use case example:
-    * Query: “What’s the weather and what should I wear?”
+    * Query: "What's the weather and what should I wear?"
     * Agent:
         * calls weather tool
         * uses result to call clothing tool
         * produces final answer
 * Implementation (LangGraph):
-    * State: list of messages (conversation + tool outputs)
+    * State: `MessagesState` (conversation + tool outputs)
     * Nodes:
         * agent node (LLM reasoning)
         * tools node (execute tool calls)
@@ -1754,13 +1754,39 @@ final_answer = responses["messages"][-1].tool_calls[0]["args"]["answer"]
         * else --> end
 * Loop continues until final answer is generated.
 
+Graph flow:
+
+```mermaid
+flowchart TD
+    START([START]) --> AGENT["agent\nreason + decide next action"]
+    AGENT --> ROUTER{"should_continue(state)"}
+    ROUTER -- "tool_calls present" --> TOOLS["tools\nexecute requested tools"]
+    TOOLS --> AGENT
+    ROUTER -- "no tool_calls" --> END([END])
+```
 
 ```python
-# 1. Define tools
-from langchain_community.tools import TavilySearchResults
-from langchain_core.tools import tool
+# pip install -U langgraph langchain langchain-openai langchain-tavily python-dotenv
 
-search = TavilySearchResults()
+# 1. Define tools and model
+import os
+from typing import Literal
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_tavily import TavilySearch
+from langgraph.graph import END, START, MessagesState, StateGraph
+
+load_dotenv()
+
+llm = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-5-nano"),
+    model_provider="openai",
+)
+
+search = TavilySearch(max_results=3, topic="general")
 
 @tool
 def recommend_clothing(weather: str) -> str:
@@ -1772,44 +1798,50 @@ def recommend_clothing(weather: str) -> str:
     return "Wear comfortable everyday clothing."
 
 
-# 2. Define state (message history)
-from typing import TypedDict, Sequence
-from langchain_core.messages import BaseMessage
-
-class AgentState(TypedDict):
-    messages: Sequence[BaseMessage]
-
-
-# 3. Build agent (LLM + tools)
-from langchain_openai import ChatOpenAI
-
-llm = ChatOpenAI()
+# 2. Bind tools to the model
 tools = [search, recommend_clothing]
 tool_map = {t.name: t for t in tools}
+# When we bind tools, we simultaneously tell the model 
+# "you may answer normally, or you may request one of these tools with structured arguments."
+llm_with_tools = llm.bind_tools(tools)
 
-def call_model(state):
-    # LLM processes full message history (scratchpad)
-    response = llm.invoke(state["messages"])
-    return {"messages": state["messages"] + [response]}
+
+# 3. Agent node: reason and decide whether to call tools
+agent_system_prompt = """\
+You are a practical assistant.
+Reason step by step. Use tools when you need current facts or weather-specific
+information. When enough information is available, answer the user directly.
+"""
+
+def call_model(state: MessagesState) -> dict:
+    response = llm_with_tools.invoke(
+        [SystemMessage(content=agent_system_prompt)] + state["messages"]
+    )
+    return {"messages": [response]}
 
 
 # 4. Tool execution node
-from langchain_core.messages import ToolMessage
-
-def tool_node(state):
+def tool_node(state: MessagesState) -> dict:
     last_msg = state["messages"][-1]
-    tool_call = last_msg.tool_calls[0]
-    tool = tool_map[tool_call["name"]]
-    result = tool.invoke(tool_call["args"])
-    return {
-        "messages": state["messages"] + [ToolMessage(content=str(result))]
-    }
+    tool_messages = []
+
+    for tool_call in last_msg.tool_calls:
+        tool = tool_map[tool_call["name"]]
+        result = tool.invoke(tool_call["args"])
+        tool_messages.append(
+            ToolMessage(
+                content=str(result),
+                tool_call_id=tool_call["id"],
+                name=tool_call["name"],
+            )
+        )
+
+    return {"messages": tool_messages}
 
 
 # 5. Conditional routing
-from langgraph.graph import StateGraph, END
-
-def should_continue(state):
+# If the model answered with a tool call, we need to continue to the tools node. If there are no tool calls, we can end the workflow.
+def should_continue(state: MessagesState) -> Literal["tools", END]:
     last_msg = state["messages"][-1]
     if not getattr(last_msg, "tool_calls", None):
         return END
@@ -1817,18 +1849,14 @@ def should_continue(state):
 
 
 # 6. Build graph
-graph = StateGraph(AgentState)
+graph = StateGraph(MessagesState)
 graph.add_node("agent", call_model)
 graph.add_node("tools", tool_node)
-graph.add_edge("agent", "tools")
+graph.add_edge(START, "agent")
 graph.add_conditional_edges("agent", should_continue)
 graph.add_edge("tools", "agent")
-graph.set_entry_point("agent")
 app = graph.compile()
 
-
-# 7. Run agent
-from langchain_core.messages import HumanMessage
 
 result = app.invoke({
     "messages": [HumanMessage(content="What's the weather in Zurich and what should I wear?")]
@@ -1838,9 +1866,192 @@ result = app.invoke({
 print(result["messages"][-1].content)
 # Execution loop:
 # Human --> agent (Thought/Action) --> tools (Observation) --> agent --> ... --> END
+
+# Example flow:
+# Human: "Weather in Zurich and what should I wear?"
+# 
+# AIMessage: tool_calls=[search_tool("Zurich weather today")]
+# ToolMessage: "Zurich is 12°C and rainy"
+# 
+# AIMessage: tool_calls=[recommend_clothing("12°C and rainy")]
+# ToolMessage: "Bring a raincoat and waterproof shoes"
+# 
+# AIMessage: "It is rainy and around 12°C in Zurich. Wear..."
+# No tool_calls --> END
+#
 ```
 
 #### Exercise: Build a ReAct Agent with LangGraph
+
+Notebook: [`lab/04_ReAct-v1.ipynb`](./lab/04_ReAct-v1.ipynb).
+
+The notebook builds a current LangGraph ReAct agent end to end:
+
+* Loads `OPENAI_API_KEY`, `TAVILY_API_KEY`, and optional `OPENAI_MODEL` from `.env`.
+* Uses `init_chat_model(..., model_provider="openai")` instead of provider-specific notebook credentials.
+* Defines tool-calling behavior with LangChain tools: web search, clothing recommendation, calculator, and news summarization.
+* Uses `MessagesState`, `START`, `END`, and `StateGraph` for the current LangGraph graph API.
+* Shows the ReAct loop manually before automating it with a graph.
+* Completes the exercises by adding a safe AST-based calculator and a search-result summarizer.
+
+Core ReAct graph:
+
+```mermaid
+flowchart TD
+    START([START]) --> AGENT["agent\nLLM reasons and may call tools"]
+    AGENT --> ROUTE{"tool_calls?"}
+    ROUTE -- yes --> TOOLS["tools\nexecute requested tools"]
+    TOOLS --> AGENT
+    ROUTE -- no --> END([END])
+```
+
+Extended tool dispatch:
+
+```mermaid
+flowchart TD
+    USER["User request"] --> AGENT["agent\nOpenAI model bound to tools"]
+    AGENT --> ROUTE{"Needs action?"}
+    ROUTE -- no --> FINAL["Final answer"]
+    ROUTE -- yes --> DISPATCH["tools node"]
+    DISPATCH --> SEARCH["search_tool\nTavily web search"]
+    DISPATCH --> CLOTHING["recommend_clothing\nweather advice"]
+    DISPATCH --> CALC["calculator_tool\nsafe math evaluation"]
+    DISPATCH --> NEWS["news_summarizer_tool\nsummarize search results"]
+    SEARCH --> OBS["ToolMessage observations"]
+    CLOTHING --> OBS
+    CALC --> OBS
+    NEWS --> OBS
+    OBS --> AGENT
+    FINAL --> END([END])
+```
+
+Important code pieces:
+
+```python
+import ast
+import json
+import math
+import operator
+import os
+from typing import Literal
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_tavily import TavilySearch
+from langgraph.graph import END, START, MessagesState, StateGraph
+
+load_dotenv()
+
+model = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-5-nano"),
+    model_provider="openai",
+)
+search = TavilySearch(max_results=3, topic="general")
+
+@tool
+def search_tool(query: str) -> str:
+    """Search the web for current information."""
+    return json.dumps(search.invoke({"query": query}), ensure_ascii=False)
+
+@tool
+def recommend_clothing(weather: str) -> str:
+    """Recommend clothing from a weather description."""
+    text = weather.lower()
+    if "snow" in text or "freezing" in text:
+        return "Wear a heavy coat, gloves, and boots."
+    if "rain" in text or "wet" in text:
+        return "Bring a raincoat and waterproof shoes."
+    if "hot" in text or "85" in text:
+        return "T-shirt, shorts, and sunscreen recommended."
+    return "A light jacket should be fine."
+
+@tool
+def calculator_tool(expression: str) -> str:
+    """Safely evaluate a math expression such as sqrt(144) + 10."""
+    operators = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.Pow: operator.pow,
+        ast.USub: operator.neg,
+    }
+    functions = {"sqrt": math.sqrt, "sin": math.sin, "cos": math.cos}
+    constants = {"pi": math.pi, "e": math.e}
+
+    def eval_node(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        if isinstance(node, ast.Name) and node.id in constants:
+            return constants[node.id]
+        if isinstance(node, ast.BinOp) and type(node.op) in operators:
+            return operators[type(node.op)](eval_node(node.left), eval_node(node.right))
+        if isinstance(node, ast.UnaryOp) and type(node.op) in operators:
+            return operators[type(node.op)](eval_node(node.operand))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            return functions[node.func.id](*[eval_node(arg) for arg in node.args])
+        raise ValueError("Unsupported expression")
+
+    tree = ast.parse(expression.replace("π", "pi"), mode="eval")
+    return str(eval_node(tree.body))
+
+@tool
+def news_summarizer_tool(news_content: str) -> str:
+    """Turn Tavily-style search results into three concise bullets."""
+    parsed = json.loads(news_content)
+    articles = parsed.get("results", [])[:3]
+    return "\n\n".join(
+        f"{i}. {article.get('title', 'Untitled')}\n"
+        f"   Source: {article.get('url', 'No URL')}\n"
+        f"   Main point: {article.get('content', '')[:350]}"
+        for i, article in enumerate(articles, start=1)
+    )
+
+tools = [search_tool, recommend_clothing, calculator_tool, news_summarizer_tool]
+tools_by_name = {tool.name: tool for tool in tools}
+model_with_tools = model.bind_tools(tools)
+
+system_prompt = "You are a helpful ReAct assistant. Use tools when needed."
+
+def call_model(state: MessagesState) -> dict:
+    response = model_with_tools.invoke(
+        [SystemMessage(content=system_prompt)] + state["messages"]
+    )
+    return {"messages": [response]}
+
+def tool_node(state: MessagesState) -> dict:
+    messages = []
+    for tool_call in state["messages"][-1].tool_calls:
+        result = tools_by_name[tool_call["name"]].invoke(tool_call["args"])
+        messages.append(
+            ToolMessage(
+                content=str(result),
+                name=tool_call["name"],
+                tool_call_id=tool_call["id"],
+            )
+        )
+    return {"messages": messages}
+
+def should_continue(state: MessagesState) -> Literal["tools", END]:
+    return "tools" if state["messages"][-1].tool_calls else END
+
+workflow = StateGraph(MessagesState)
+workflow.add_node("agent", call_model)
+workflow.add_node("tools", tool_node)
+workflow.add_edge(START, "agent")
+workflow.add_conditional_edges("agent", should_continue, ["tools", END])
+workflow.add_edge("tools", "agent")
+graph = workflow.compile()
+
+result = graph.invoke({
+    "messages": [HumanMessage(content="Calculate 15% of 250 plus sqrt(144).")]
+})
+print(result["messages"][-1].content)
+```
+
+
 
 ### Summary and Cheat Sheet: Build Self-Improving Agents with LangGraph
 
