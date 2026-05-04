@@ -58,6 +58,8 @@ Table of contents:
       - [Key Takeaways](#key-takeaways)
       - [Practical Guidance](#practical-guidance)
   - [3. Multi-Agent Systems and Agentic RAG with LangGraph](#3-multi-agent-systems-and-agentic-rag-with-langgraph)
+  - [4. Extras](#4-extras)
+    - [Deep Agents](#deep-agents)
 
 
 ## 1. Introduction to LangGraph
@@ -2490,3 +2492,17 @@ print(result["messages"][-1].content)
 LangGraph enables all three patterns through explicit, inspectable graph workflows.
 
 ## 3. Multi-Agent Systems and Agentic RAG with LangGraph
+
+
+## 4. Extras
+
+### Deep Agents
+
+https://medium.com/towards-artificial-intelligence/langchain-just-released-deep-agents-and-it-changes-how-you-build-ai-systems-cc2371b04714
+
+https://docs.langchain.com/oss/python/deepagents/overview
+
+https://github.com/langchain-ai/deepagents
+
+https://www.langchain.com/deep-agents
+
