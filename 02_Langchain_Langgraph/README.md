@@ -49,6 +49,14 @@ Table of contents:
       - [Building Agents that Reason before Acting](#building-agents-that-reason-before-acting)
       - [Exercise: Build a ReAct Agent with LangGraph](#exercise-build-a-react-agent-with-langgraph)
     - [Summary and Cheat Sheet: Build Self-Improving Agents with LangGraph](#summary-and-cheat-sheet-build-self-improving-agents-with-langgraph)
+      - [Core Idea](#core-idea)
+      - [Agent Types Overview](#agent-types-overview)
+      - [Reflection Agents](#reflection-agents)
+      - [Reflexion Agents](#reflexion-agents)
+      - [ReAct Agents](#react-agents)
+      - [Comparison](#comparison)
+      - [Key Takeaways](#key-takeaways)
+      - [Practical Guidance](#practical-guidance)
   - [3. Multi-Agent Systems and Agentic RAG with LangGraph](#3-multi-agent-systems-and-agentic-rag-with-langgraph)
 
 
@@ -2051,10 +2059,434 @@ result = graph.invoke({
 print(result["messages"][-1].content)
 ```
 
-
-
 ### Summary and Cheat Sheet: Build Self-Improving Agents with LangGraph
 
+#### Core Idea
 
+Self-improving agents refine their own outputs through explicit feedback loops. In current LangGraph, build these loops with:
+
+* **State**: a typed state object, usually `TypedDict`, `MessagesState`, or a subclass of `MessagesState`.
+* **Nodes**: Python functions, LangChain runnables, model calls, tool executors, or validators.
+* **Edges**: graph transitions, including `START`, `END`, and `add_conditional_edges(...)`.
+* **Reducers**: merge behavior for state keys. `MessagesState` already uses the message reducer, so nodes can return only newly produced messages.
+
+Current API defaults:
+
+| Need | Current API |
+| --- | --- |
+| Build a custom loop | `StateGraph(State)` |
+| Store chat history | `MessagesState` |
+| Mark graph boundaries | `START`, `END` |
+| Execute tool calls | `ToolNode(tools)` |
+| Route based on tool calls | `tools_condition` |
+| Initialize chat models | `init_chat_model(...)` |
+| Create a high-level LangChain agent | `create_agent(...)` |
+
+#### Agent Types Overview
+
+| Agent Type | Strategy | Best fit |
+| --- | --- | --- |
+| Reflection | Generate, critique, revise using only the model. | Drafting, explanations, style improvement. |
+| Reflexion | Generate, critique, retrieve evidence, revise. | Research, factual QA, coding help, verification-heavy tasks. |
+| ReAct | Reason, call tools, observe results, repeat. | Tool orchestration, APIs, current facts, multi-step tasks. |
+
+#### Reflection Agents
+
+**Concept**
+
+* Iterative loop: generate --> critique --> refine.
+* Uses only internal model reasoning; no external tools or new facts.
+* Good for improving clarity, structure, tone, and completeness.
+
+**Workflow**
+
+1. `generate`: produce a draft from the current messages.
+2. `reflect`: critique the latest draft and convert the critique into feedback.
+3. Conditional edge: loop until a maximum number of drafts is reached.
+
+![Reflection Workflow](./assets/reflection_workflow.png)
+
+**Current LangGraph code**
+
+```python
+import os
+from typing import Literal
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import END, START, MessagesState, StateGraph
+
+load_dotenv()
+
+model = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+    model_provider="openai",
+    temperature=0,
+)
+
+MAX_DRAFTS = 3
+
+
+class ReflectionState(MessagesState):
+    draft_count: int
+
+
+def generate(state: ReflectionState) -> dict:
+    """Generate or revise the answer using the conversation and feedback."""
+    response = model.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are a precise technical writer. Produce the best answer "
+                    "you can. If critique is present, revise accordingly."
+                )
+            ),
+            *state["messages"],
+        ]
+    )
+    return {
+        "messages": [response],
+        "draft_count": state.get("draft_count", 0) + 1,
+    }
+
+
+def reflect(state: ReflectionState) -> dict:
+    """Critique the latest draft and feed that critique back to the generator."""
+    critique = model.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "Critique the latest answer. Be specific about missing "
+                    "details, inaccuracies, unclear wording, and improvements."
+                )
+            ),
+            state["messages"][-1],
+        ]
+    )
+    return {
+        "messages": [
+            HumanMessage(content=f"Critique this draft and revise it:\n{critique.content}")
+        ]
+    }
+
+
+def should_continue(state: ReflectionState) -> Literal["reflect", END]:
+    if state.get("draft_count", 0) >= MAX_DRAFTS:
+        return END
+    return "reflect"
+
+
+builder = StateGraph(ReflectionState)
+builder.add_node("generate", generate)
+builder.add_node("reflect", reflect)
+builder.add_edge(START, "generate")
+builder.add_conditional_edges("generate", should_continue)
+builder.add_edge("reflect", "generate")
+
+graph = builder.compile()
+
+result = graph.invoke(
+    {
+        "messages": [
+            HumanMessage(content="Explain photosynthesis to a high-school student.")
+        ],
+        "draft_count": 0,
+    }
+)
+
+print(result["messages"][-1].content)
+```
+
+#### Reflexion Agents
+
+**Concept**
+
+* Extends reflection with external grounding from search, APIs, databases, tests, or other tools.
+* Separates answer drafting, evidence gathering, and revision.
+* Useful when the agent must cite sources, verify claims, or correct factual gaps.
+
+**Workflow**
+
+1. Draft answer
+2. Execute tools from generated search/tool requests
+3. Revise answer using results
+4. Repeat until the revision is good enough or a loop limit is reached
+
+![Reflexion Workflow](./assets/reflexion_workflow.png)
+
+**Current LangChain + LangGraph code**
+
+```python
+import json
+import os
+from typing import Literal
+from typing_extensions import TypedDict
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_tavily import TavilySearch
+from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel, Field
+
+load_dotenv()
+
+model = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+    model_provider="openai",
+    temperature=0,
+)
+search = TavilySearch(max_results=3, topic="general")
+
+
+class AnswerQuestion(BaseModel):
+    """Initial answer plus self-reflection and search requests."""
+
+    answer: str = Field(description="The best answer currently possible.")
+    reflection: str = Field(description="Missing information or weaknesses.")
+    search_queries: list[str] = Field(
+        description="Search queries that would improve or verify the answer."
+    )
+
+
+class ReviseAnswer(AnswerQuestion):
+    """Revised answer grounded in evidence."""
+
+    citations: list[str] = Field(description="URLs or source names used as evidence.")
+
+
+class ReflexionState(TypedDict):
+    question: str
+    draft: AnswerQuestion | None
+    evidence: list[str]
+    revision: ReviseAnswer | None
+    iterations: int
+
+
+draft_chain = model.with_structured_output(AnswerQuestion)
+revise_chain = model.with_structured_output(ReviseAnswer)
+MAX_REVISIONS = 2
+
+
+def draft_answer(state: ReflexionState) -> dict:
+    draft = draft_chain.invoke(
+        [
+            (
+                "system",
+                "Answer the question. Also reflect on weaknesses and propose "
+                "search queries needed for verification.",
+            ),
+            ("user", state["question"]),
+        ]
+    )
+    return {"draft": draft}
+
+
+def execute_tools(state: ReflexionState) -> dict:
+    search_queries = (
+        state["revision"].search_queries
+        if state.get("revision")
+        else state["draft"].search_queries
+    )
+
+    evidence = []
+    for query in search_queries:
+        result = search.invoke({"query": query})
+        evidence.append(json.dumps(result, ensure_ascii=False, default=str))
+
+    return {"evidence": evidence}
+
+
+def revise_answer(state: ReflexionState) -> dict:
+    previous_answer = state["revision"] or state["draft"]
+    revision = revise_chain.invoke(
+        [
+            (
+                "system",
+                "Revise the answer using the evidence. Keep useful citations. "
+                "If more evidence is needed, include new search queries.",
+            ),
+            (
+                "user",
+                json.dumps(
+                    {
+                        "question": state["question"],
+                        "previous_answer": previous_answer.model_dump(),
+                        "evidence": state["evidence"],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        ]
+    )
+    return {
+        "revision": revision,
+        "iterations": state.get("iterations", 0) + 1,
+    }
+
+
+def continue_reflexion(state: ReflexionState) -> Literal["execute_tools", END]:
+    if state.get("iterations", 0) >= MAX_REVISIONS:
+        return END
+    if not state["revision"].search_queries:
+        return END
+    return "execute_tools"
+
+
+builder = StateGraph(ReflexionState)
+builder.add_node("draft", draft_answer)
+builder.add_node("execute_tools", execute_tools)
+builder.add_node("revise", revise_answer)
+builder.add_edge(START, "draft")
+builder.add_edge("draft", "execute_tools")
+builder.add_edge("execute_tools", "revise")
+builder.add_conditional_edges("revise", continue_reflexion)
+
+graph = builder.compile()
+
+result = graph.invoke(
+    {
+        "question": "What breakfast foods should someone with prediabetes avoid?",
+        "draft": None,
+        "evidence": [],
+        "revision": None,
+        "iterations": 0,
+    }
+)
+
+print(result["revision"].answer)
+print(result["revision"].citations)
+```
+
+#### ReAct Agents
+
+**Concept**
+
+* Interleaves reasoning and action.
+* Pattern: user message --> model decides tool call --> tool result --> model continues.
+* In current LangGraph, use `ToolNode` and `tools_condition` for the common ReAct tool loop.
+
+**Workflow**
+
+1. Bind tools to the model with `model.bind_tools(tools)`.
+2. Agent node calls the tool-aware model.
+3. `tools_condition` checks whether the latest AI message has tool calls.
+4. `ToolNode` executes requested tools and returns `ToolMessage` objects.
+5. Loop back to the agent until no tool call is present.
+
+![ReAct Workflow](./assets/react_workflow.png)
+
+**Current LangGraph code**
+
+```python
+import os
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import tool
+from langgraph.graph import START, MessagesState, StateGraph
+from langgraph.prebuilt import ToolNode, tools_condition
+
+load_dotenv()
+
+model = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+    model_provider="openai",
+    temperature=0,
+)
+
+
+@tool
+def get_weather(city: str) -> str:
+    """Get a short weather report for a city."""
+    examples = {
+        "zurich": "Zurich is 12 C and rainy.",
+        "new york": "New York is 25 C and sunny.",
+    }
+    return examples.get(city.lower(), f"No weather report available for {city}.")
+
+
+@tool
+def recommend_clothing(weather: str) -> str:
+    """Recommend clothing from a weather description."""
+    text = weather.lower()
+    if "rain" in text:
+        return "Wear a raincoat and waterproof shoes."
+    if "sunny" in text:
+        return "Wear light clothes and sunglasses."
+    return "Wear comfortable layers."
+
+
+tools = [get_weather, recommend_clothing]
+model_with_tools = model.bind_tools(tools)
+
+
+def call_model(state: MessagesState) -> dict:
+    response = model_with_tools.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are a practical assistant. Use tools when weather or "
+                    "clothing recommendations require concrete information."
+                )
+            ),
+            *state["messages"],
+        ]
+    )
+    return {"messages": [response]}
+
+
+builder = StateGraph(MessagesState)
+builder.add_node("agent", call_model)
+builder.add_node("tools", ToolNode(tools))
+builder.add_edge(START, "agent")
+builder.add_conditional_edges("agent", tools_condition)
+builder.add_edge("tools", "agent")
+
+graph = builder.compile()
+
+result = graph.invoke(
+    {
+        "messages": [
+            HumanMessage(content="What is the weather in Zurich, and what should I wear?")
+        ]
+    }
+)
+
+print(result["messages"][-1].content)
+```
+
+#### Comparison
+
+| Aspect | Reflection | Reflexion | ReAct |
+| --- | --- | --- | --- |
+| Feedback | Internal critique | External evidence + internal critique | Tool observations |
+| Structure | Generate <--> Reflect | Draft --> Tool --> Revise | Agent <--> Tools |
+| Main state | `MessagesState` plus counters | Typed state with draft, evidence, revision | `MessagesState` |
+| Current helper APIs | `StateGraph`, `MessagesState` | `StateGraph`, `with_structured_output`, tools | `ToolNode`, `tools_condition`, `bind_tools` |
+| Complexity | Low | High | Medium |
+| Strength | Improves wording and completeness | Improves factuality and citation quality | Handles dynamic tool workflows |
+| Weakness | No new knowledge | Slower and more expensive | Depends on tool quality |
+
+#### Key Takeaways
+
+* `MessageGraph` is no longer the preferred pattern for new examples; use `StateGraph` with `MessagesState` or a typed custom state.
+* Reflection is the simplest self-improvement loop, but it cannot add external knowledge.
+* Reflexion adds grounding, evidence, and verification with structured outputs and tools.
+* ReAct is the standard pattern for model-directed tool use.
+* For a high-level tool-using LangChain agent, use `create_agent(...)`; for custom self-improvement loops, use LangGraph directly.
+* Increasing capability usually increases latency, cost, and the need for evaluation.
+
+#### Practical Guidance
+
+* Start with `create_agent(...)` or a ReAct-style graph for most tool-using assistants.
+* Add Reflection when output quality matters more than factual grounding.
+* Use Reflexion when correctness, citations, tests, or evidence are critical.
+* Add explicit loop limits such as `MAX_DRAFTS` or `MAX_REVISIONS`.
+* Keep tool outputs JSON-serializable and state schemas explicit.
+* Use checkpointing when loops are long-running or require human review.
+
+LangGraph enables all three patterns through explicit, inspectable graph workflows.
 
 ## 3. Multi-Agent Systems and Agentic RAG with LangGraph
