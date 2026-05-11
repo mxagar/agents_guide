@@ -58,6 +58,14 @@ Table of contents:
       - [Key Takeaways](#key-takeaways)
       - [Practical Guidance](#practical-guidance)
   - [3. Multi-Agent Systems and Agentic RAG with LangGraph](#3-multi-agent-systems-and-agentic-rag-with-langgraph)
+    - [The Evolution from Single Multi-Agent Systems](#the-evolution-from-single-multi-agent-systems)
+      - [Introduction to Multi-Agent Systems](#introduction-to-multi-agent-systems)
+      - [Risks of Agentic AI](#risks-of-agentic-ai)
+    - [Building Multi-Agent Applications](#building-multi-agent-applications)
+      - [Agentic RAG: Enhancing Retrieval-Augmented Generation with Multi-Agent Systems](#agentic-rag-enhancing-retrieval-augmented-generation-with-multi-agent-systems)
+      - [Building Multi-Agent Systems with LangGraph](#building-multi-agent-systems-with-langgraph)
+      - [Exercise: DocChat -- Build a Multi-Agent RAG System](#exercise-docchat----build-a-multi-agent-rag-system)
+    - [Summary and Cheat Sheet: Multi-Agent Systems and Agentic RAG with LangGraph](#summary-and-cheat-sheet-multi-agent-systems-and-agentic-rag-with-langgraph)
   - [4. Extra: Deep Agents](#4-extra-deep-agents)
 
 
@@ -2492,6 +2500,714 @@ LangGraph enables all three patterns through explicit, inspectable graph workflo
 
 ## 3. Multi-Agent Systems and Agentic RAG with LangGraph
 
+### The Evolution from Single Multi-Agent Systems
+
+#### Introduction to Multi-Agent Systems
+
+* Multi-agent systems (MAS) consist of multiple autonomous AI agents collaborating to solve complex tasks
+  * each agent has a specialized role
+  * agents interact with:
+    * the environment
+    * other agents
+  * analogy: like chefs in a kitchen, each specializing in one task
+* Why multi-agent LLM systems?
+  * single-agent limitations:
+    * context overload: too many tasks in one conversation degrade performance
+    * role confusion: mixing retrieval, writing, critique, etc. reduces quality
+    * debugging difficulty: hard to isolate reasoning failures
+    * quality dilution: one model becomes mediocre at many tasks instead of excellent at one
+  * multi-agent benefits:
+    * clear responsibilities per subtask
+    * specialized prompt engineering per agent
+    * modular debugging and testing
+    * scalability: agents can be added/replaced independently
+* Core components
+  * agents: autonomous entities with goals/capabilities
+  * environment: context where agents operate
+  * communication protocols: standards for information exchange and coordination
+  * orchestrator/coordinator:
+    * routes tasks
+    * manages workflows
+    * aggregates outputs
+* Agent specialization principles
+  * capability boundaries: each agent should have one focused responsibility
+  * expertise depth vs breadth: combine specialist agents with coordinator/generalist agents
+  * interface standardization: structured communication (often JSON schemas or Pydantic models)
+  * handoff patterns: agents pass tasks/results between each other
+* Example: research assistant system
+  * retriever agent: fetches documents/data
+  * analysis agent: extracts patterns/insights
+  * summarizer/writer agent: generates readable content
+  * critique agent: checks for bias, gaps, consistency
+  * editor/compiler agent: produces polished final report
+* Example: customer support automation
+  * intent detection agent: classifies request type
+  * retrieval agent: fetches FAQs/history
+  * response generation agent: drafts reply
+  * escalation agent: routes unresolved cases to humans
+* Example: legal contract review
+  * clause extraction agent: identifies important clauses
+  * compliance agent: checks regulations
+  * risk analysis agent: flags risky terms
+  * summary/report agent: generates legal memo
+* Advantages
+  * scalability: agents can be added/removed dynamically
+  * flexibility: agents adapt to tasks/environment
+  * robustness: system can continue if some agents fail
+  * modularity: components can evolve independently
+  * higher quality outputs through specialization
+* Common collaboration patterns
+  * pipeline pattern:
+    * sequential handoff between agents
+    * example: research --> analysis --> writing --> review
+  * parallel + aggregation pattern:
+    * multiple agents execute simultaneously
+    * aggregator/compiler combines outputs
+    * example: SEO + fact-checking + technical writing for a blog post
+  * interactive dialogue:
+    * agents exchange clarifications iteratively
+    * example: requirements agent <--> data agent <--> filter agent
+  * hub-and-spoke pattern:
+    * central coordinator dispatches tasks
+    * example: manager --> writer/fact-checker/SEO agents
+* Communication protocols
+  * MCP (Model Context Protocol):
+    * standardizes access to tools/data/context
+    * JSON-RPC based integration layer for tools/APIs/databases
+  * ACP (Agent Communication Protocol):
+    * standardizes agent-to-agent communication
+    * developed by IBM
+    * supports modular and secure collaboration
+* Orchestration frameworks
+  * LangGraph:
+    * graph-based workflows
+    * shared state + conditional routing
+  * CrewAI:
+    * structured workflows
+    * typed interfaces/Pydantic models
+  * AutoGen:
+    * conversational/self-organizing agents
+    * negotiation between agents
+  * BeeAI:
+    * enterprise-grade orchestration
+    * ACP-based communication
+* Challenges
+  * coordination complexity
+  * communication overhead and latency
+  * context management between agents
+  * granularity tradeoff:
+    * too few agents --> overload
+    * too many agents --> orchestration overhead
+  * error handling and retries
+  * security risks
+* Key idea
+  * multi-agent LLM systems mirror effective human teamwork:
+    * specialization
+    * delegation
+    * communication
+    * coordination
+  * they are especially useful for:
+    * complex workflows
+    * multi-step reasoning
+    * enterprise automation
+    * research/reporting systems
+
+```python
+# Example: multi-agent market research workflow
+
+class ResearchAgent:
+    def run(self, topic):
+        # retrieve market/news/company information
+        return {
+            "market_trends": "...",
+            "competitors": "...",
+            "news": "..."
+        }
+
+class AnalysisAgent:
+    def run(self, research_data):
+        # analyze trends and detect anomalies
+        return {
+            "growth_rate": "12%",
+            "anomalies": ["declining segment"],
+            "insights": ["AI adoption increasing"]
+        }
+
+class WritingAgent:
+    def run(self, research_data, analysis):
+        # draft initial report
+        return f"""
+        Market Research Report
+        
+        Trends:
+        {research_data["market_trends"]}
+        
+        Insights:
+        {analysis["insights"]}
+        """
+
+class CritiqueAgent:
+    def run(self, draft):
+        # evaluate consistency/completeness
+        return {
+            "issues": ["missing regional comparison"],
+            "improvements": ["add recent competitor data"]
+        }
+
+class EditorAgent:
+    def run(self, draft, critique):
+        # polish style/grammar/final formatting
+        return f"""
+        FINAL REPORT
+        
+        {draft}
+        
+        Improvements Applied:
+        {critique["improvements"]}
+        """
+
+# Coordinator / orchestrator
+
+topic = "AI market trends"
+
+research_data = ResearchAgent().run(topic)
+analysis = AnalysisAgent().run(research_data)
+
+draft = WritingAgent().run(research_data, analysis)
+
+critique = CritiqueAgent().run(draft)
+
+final_report = EditorAgent().run(draft, critique)
+
+print(final_report)
+```
+
+#### Risks of Agentic AI
+
+* Agentic AI differs from traditional AI
+  * traditional AI: input --> prediction/output; mostly reactive systems
+  * agentic AI: chains multiple AI decisions together, where outputs from one model become inputs to another; systems can autonomously plan and act
+* Core characteristics of agentic AI
+  * autonomy: systems operate with reduced human oversight; autonomy amplifies risks
+  * underspecification: agents receive broad goals without explicit instructions on how to achieve them
+  * long-term planning: decisions build on previous decisions over time
+  * goal-directed behavior: systems actively pursue objectives instead of simply responding
+  * directedness of impact: actions can directly affect systems/users without human approval
+* Key idea
+  * increased autonomy = increased risk
+  * risks include misinformation, hallucinations, decision-making failures, security vulnerabilities, compliance violations, and harmful autonomous actions
+* Governance requirements for agentic AI
+  * governance must be multilayered:
+    * technical safeguards
+    * process controls
+    * monitoring/evaluation
+    * organizational accountability
+* Technical safeguards
+  * interruptibility: ability to pause/shutdown requests or systems
+  * human-in-the-loop: define when human approval is required
+  * confidential data protection: PII detection/masking and data sanitization
+  * model-layer safeguards: prevent malicious or policy-violating behavior
+  * orchestration-layer safeguards: infinite-loop detection and workflow monitoring
+  * tool-layer safeguards: role-based access control (RBAC) and restricted permissions per agent
+  * red teaming: stress-test systems before deployment
+  * continuous monitoring: automated evaluations for hallucinations, policy violations, and abnormal behavior
+* Process controls
+  * risk-based permissions: define actions AI cannot perform autonomously
+  * auditability: trace reasoning and decisions
+  * monitoring/evaluation: continuous oversight of agent performance
+* Organizational governance
+  * accountability: define responsibility for AI failures
+  * compliance: align with regulations/policies
+  * vendor governance: hold external AI vendors accountable
+* Important infrastructure/tools
+  * guardrail systems: detect unsafe prompts/responses
+  * orchestration frameworks: coordinate workflows safely across agents
+  * security-focused guardrails: enforce policies and protect sensitive data
+  * observability systems: monitor internal system behavior and provide debugging/traceability
+* Key takeaway
+  * governance is not optional for agentic AI
+  * AI should empower organizations while remaining controllable and operating within defined safeguards
+  * responsibility remains with humans and organizations, not the AI itself
+
+```python
+# Example: simplified governance checks for an agentic AI workflow
+
+class AgentGuardrails:
+
+    def validate_request(self, user_input):
+        # detect unsafe or prohibited requests
+        blocked_terms = ["delete database", "expose passwords"]
+
+        for term in blocked_terms:
+            if term in user_input.lower():
+                raise Exception("Blocked unsafe request")
+
+    def check_pii(self, text):
+        # simplistic PII masking example
+        return text.replace("@", "[at]")
+
+    def require_human_approval(self, action):
+        # critical actions require human approval
+        high_risk_actions = [
+            "transfer_money",
+            "delete_records",
+            "shutdown_system"
+        ]
+
+        return action in high_risk_actions
+
+    def log_action(self, action, reasoning):
+        # auditability / observability
+        print(f"[AUDIT] action={action}")
+        print(f"[AUDIT] reasoning={reasoning}")
+
+
+# Example orchestration flow
+
+guardrails = AgentGuardrails()
+
+user_request = "Transfer money to external account"
+
+# 1. Validate request
+guardrails.validate_request(user_request)
+
+# 2. AI agent proposes action
+proposed_action = "transfer_money"
+
+# 3. Human-in-the-loop approval
+if guardrails.require_human_approval(proposed_action):
+    print("Human approval required before execution")
+
+# 4. Audit logging
+guardrails.log_action(
+    action=proposed_action,
+    reasoning="User requested financial transfer"
+)
+
+# 5. Safe execution would happen here
+print("Workflow completed safely")
+```
+
+### Building Multi-Agent Applications
+
+#### Agentic RAG: Enhancing Retrieval-Augmented Generation with Multi-Agent Systems
+
+* RAG (Retrieval Augmented Generation) enhances LLM responses by retrieving relevant information from a vector database and adding it as context to the prompt before generation
+* Basic RAG pipeline
+  * user query --> vector database retrieval --> retrieved context added to prompt --> LLM generates grounded response
+  * benefits:
+    * more accurate responses
+    * reduced hallucinations
+    * grounding in real data/documents
+* Traditional RAG limitations
+  * usually:
+    * one vector database
+    * one retrieval step
+    * one LLM call
+  * the LLM only generates responses and does not actively reason about retrieval strategy
+* Agentic RAG extends RAG by using the LLM as an agent
+  * the LLM:
+    * decides which data source to query
+    * interprets query intent/context
+    * routes requests dynamically
+    * can decide response format (text/chart/code/etc.)
+    * can trigger fail-safe behavior
+* Example architecture
+  * internal documentation database:
+    * company policies
+    * procedures
+    * internal guidelines
+  * external/general knowledge database:
+    * industry standards
+    * public resources
+    * best practices
+* Agentic routing examples
+  * query:
+    * "What is the company policy on remote work?"
+    * routed to internal documentation DB
+  * query:
+    * "What are industry standards for remote work?"
+    * routed to general knowledge DB
+* Fail-safe handling
+  * if query is unrelated to available knowledge:
+    * example: "Who won the World Series in 2015?"
+    * agent routes to fallback response
+    * avoids hallucinated answers
+* Key advantages of Agentic RAG
+  * dynamic retrieval decisions
+  * context-aware routing
+  * higher accuracy/relevance
+  * ability to combine multiple data sources
+  * extensibility with external APIs/real-time services
+* Example applications
+  * customer support
+  * legal tech
+  * healthcare
+  * enterprise assistants
+  * research systems
+* Core insight
+  * traditional RAG:
+    * retrieval + generation
+  * agentic RAG:
+    * retrieval + reasoning + decision-making + generation
+
+```python
+# Simplified Agentic RAG example
+
+class AgenticRAG:
+
+    def route_query(self, query):
+        """
+        Decide which knowledge source to use
+        """
+
+        if "company policy" in query.lower():
+            return "internal_docs"
+
+        elif "industry standards" in query.lower():
+            return "general_knowledge"
+
+        else:
+            return "fallback"
+
+    def retrieve_context(self, source, query):
+        """
+        Simulate vector DB retrieval
+        """
+
+        databases = {
+            "internal_docs": "Remote work policy: employees may work remotely during holidays.",
+            "general_knowledge": "Industry trend: hybrid and remote work are standard in tech.",
+        }
+
+        return databases.get(source, None)
+
+    def generate_response(self, query, context):
+        """
+        Simulate LLM generation using retrieved context
+        """
+
+        if context is None:
+            return "Sorry, I don't have the information you're looking for."
+
+        return f"Question: {query}\n\nContext: {context}\n\nGenerated Answer: {context}"
+
+
+# Example usage
+
+agentic_rag = AgenticRAG()
+
+query = "What is the company policy on remote work?"
+
+# 1. Agent decides where to retrieve from
+source = agentic_rag.route_query(query)
+
+# 2. Retrieve relevant context
+context = agentic_rag.retrieve_context(source, query)
+
+# 3. Generate grounded response
+response = agentic_rag.generate_response(query, context)
+
+print(response)
+```
+
+#### Building Multi-Agent Systems with LangGraph
+
+* LangGraph represents a multi-agent workflow as a stateful graph:
+  * nodes are specialized agents, deterministic processing steps, or compiled subgraphs
+  * state is the shared contract between agents
+  * edges, conditional edges, and optional `Command(goto=...)` control handoffs
+  * `START` and `END` mark graph boundaries explicitly
+* Current LangGraph style:
+  * define a typed state with `TypedDict`
+  * have nodes return partial state updates instead of mutating and returning the entire state
+  * use reducers such as `Annotated[list[T], operator.add]` when multiple nodes append to the same key
+  * use `add_conditional_edges(...)` when routing should be separated from node logic, as in the flowchart below
+  * use `Command(update=..., goto=...)` when a node should both update state and directly choose the next agent
+  * compile with a checkpointer when conversations, approvals, or long-running workflows must be resumed
+* Common multi-agent patterns:
+  * **Network**: any agent can hand off to another agent
+  * **Supervisor**: one supervisor decides which specialist acts next
+  * **Hierarchical supervisor**: supervisors manage teams of specialists
+  * **Custom workflow**: a fixed or partly fixed graph with deterministic routing
+* Example workflow: sales report generation
+  * `data_collector`: retrieves raw sales rows
+  * `data_processor`: computes metrics
+  * `chart_generator`: prepares a visualization specification
+  * `report_generator`: writes the final report with an LLM
+  * `error_handler`: centralizes recovery and user-facing failure output
+* Design principles:
+  * keep each agent's responsibility narrow
+  * make state fields explicit and JSON-serializable when possible
+  * avoid hidden global state between agents
+  * route errors to a known recovery node
+  * add loop limits or termination rules for cyclic agent systems
+
+![Multi-Agent System Flowchart](./assets/multi_agent_system_flowchart.png)
+
+Explicit `StateGraph` workflow aligned with `multi_agent_system_flowchart.png`:
+
+```python
+# Requires: pip install -U langgraph langchain "langchain[openai]" python-dotenv
+import os
+from operator import add
+from typing import Annotated, Any
+from typing_extensions import TypedDict
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
+
+load_dotenv()
+
+model = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+    model_provider="openai",
+    temperature=0,
+)
+
+
+class SalesReportState(TypedDict):
+    request: str
+    raw_data: list[dict[str, Any]]
+    metrics: dict[str, Any]
+    chart_config: dict[str, Any]
+    report: str
+    errors: Annotated[list[str], add]
+    next_step: str
+
+
+def data_collector(state: SalesReportState) -> dict:
+    """Collect raw sales data."""
+    try:
+        raw_data = [
+            {"month": "2024-01", "region": "EU", "sales": 100_000},
+            {"month": "2024-02", "region": "EU", "sales": 120_000},
+            {"month": "2024-03", "region": "EU", "sales": 150_000},
+        ]
+        return {"raw_data": raw_data, "next_step": "data_processor"}
+    except Exception as exc:
+        return {
+            "errors": [f"data_collector failed: {exc}"],
+            "next_step": "error_handler",
+        }
+
+
+def data_processor(state: SalesReportState) -> dict:
+    """Compute metrics from the collected data."""
+    try:
+        sales = [row["sales"] for row in state["raw_data"]]
+        metrics = {
+            "total_sales": sum(sales),
+            "average_sales": round(sum(sales) / len(sales), 2),
+            "max_month": max(state["raw_data"], key=lambda row: row["sales"])["month"],
+        }
+        return {"metrics": metrics, "next_step": "chart_generator"}
+    except Exception as exc:
+        return {
+            "errors": [f"data_processor failed: {exc}"],
+            "next_step": "error_handler",
+        }
+
+
+def chart_generator(state: SalesReportState) -> dict:
+    """Create a chart specification that a UI or notebook can render."""
+    chart_config = {
+        "type": "bar",
+        "title": "Monthly EU Sales",
+        "x": [row["month"] for row in state["raw_data"]],
+        "y": [row["sales"] for row in state["raw_data"]],
+    }
+    return {"chart_config": chart_config, "next_step": "report_generator"}
+
+
+def report_generator(state: SalesReportState) -> dict:
+    """Generate the final business report."""
+    response = model.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are a concise business analyst. Write a short report "
+                    "from the sales metrics and chart configuration."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Request: {state['request']}\n"
+                    f"Metrics: {state['metrics']}\n"
+                    f"Chart config: {state['chart_config']}"
+                )
+            ),
+        ]
+    )
+    return {"report": response.content, "next_step": END}
+
+
+def error_handler(state: SalesReportState) -> dict:
+    """Return a controlled failure message."""
+    message = "Workflow failed. Errors:\n" + "\n".join(state["errors"])
+    return {"report": message, "next_step": END}
+
+
+def route_next_step(state: SalesReportState) -> str:
+    """Route according to the flowchart: next agent, error handler, or END."""
+    return state["next_step"]
+
+
+def create_sales_report_graph():
+    """Build and compile the multi-agent sales-report workflow."""
+    builder = StateGraph(SalesReportState)
+    builder.add_node("data_collector", data_collector)
+    builder.add_node("data_processor", data_processor)
+    builder.add_node("chart_generator", chart_generator)
+    builder.add_node("report_generator", report_generator)
+    builder.add_node("error_handler", error_handler)
+    builder.add_edge(START, "data_collector")
+    builder.add_conditional_edges(
+        "data_collector",
+        route_next_step,
+        {
+            "data_processor": "data_processor",
+            "error_handler": "error_handler",
+            END: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "data_processor",
+        route_next_step,
+        {
+            "chart_generator": "chart_generator",
+            "error_handler": "error_handler",
+            END: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "chart_generator",
+        route_next_step,
+        {
+            "report_generator": "report_generator",
+            "error_handler": "error_handler",
+            END: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "report_generator",
+        route_next_step,
+        {
+            "error_handler": "error_handler",
+            END: END,
+        },
+    )
+    builder.add_conditional_edges(
+        "error_handler",
+        route_next_step,
+        {
+            END: END,
+        },
+    )
+    return builder.compile()
+
+
+sales_report_graph = create_sales_report_graph()
+
+final_state = sales_report_graph.invoke(
+    {
+        "request": "Create a Q1 2024 EU sales report.",
+        "raw_data": [],
+        "metrics": {},
+        "chart_config": {},
+        "report": "",
+        "errors": [],
+        "next_step": "data_collector",
+    }
+)
+
+print(final_state["report"])
+```
+
+Supervisor-style multi-agent workflow:
+
+```python
+# Requires:
+# pip install -U langgraph langgraph-supervisor langchain "langchain[openai]"
+import os
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langgraph.prebuilt import create_react_agent
+from langgraph_supervisor import create_supervisor
+
+load_dotenv()
+
+model = init_chat_model(
+    os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+    model_provider="openai",
+    temperature=0,
+)
+
+
+def fetch_sales_data(region: str) -> str:
+    """Return sales data for a region."""
+    return (
+        f"Sales data for {region}: "
+        "January=100000, February=120000, March=150000."
+    )
+
+
+def calculate_growth(previous: float, current: float) -> float:
+    """Calculate percentage growth from previous to current."""
+    return round(((current - previous) / previous) * 100, 2)
+
+
+data_agent = create_react_agent(
+    model=model,
+    tools=[fetch_sales_data],
+    name="data_agent",
+    prompt="You retrieve sales data. Do not calculate growth rates.",
+)
+
+analysis_agent = create_react_agent(
+    model=model,
+    tools=[calculate_growth],
+    name="analysis_agent",
+    prompt="You analyze numeric sales data and calculate growth rates.",
+)
+
+workflow = create_supervisor(
+    [data_agent, analysis_agent],
+    model=model,
+    prompt=(
+        "You supervise a sales-report team. Use data_agent to retrieve data, "
+        "then analysis_agent for calculations. Return a concise final answer."
+    ),
+)
+
+app = workflow.compile()
+
+result = app.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Create a short Q1 2024 EU sales summary with growth.",
+            }
+        ]
+    }
+)
+
+print(result["messages"][-1].content)
+```
+
+#### Exercise: DocChat -- Build a Multi-Agent RAG System
+
+Folder: [`lab/05_docchat/README.md`](./lab/05_docchat/README.md).
+
+Original repository: [docchat](https://github.com/ibm-developer-skills-network/zzpwx-docchat).
+
+
+
+### Summary and Cheat Sheet: Multi-Agent Systems and Agentic RAG with LangGraph
 
 ## 4. Extra: Deep Agents
 
