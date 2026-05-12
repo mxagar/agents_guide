@@ -67,6 +67,14 @@ Table of contents:
       - [Exercise: DocChat -- Build a Multi-Agent RAG System](#exercise-docchat----build-a-multi-agent-rag-system)
     - [Summary and Cheat Sheet: Multi-Agent Systems and Agentic RAG with LangGraph](#summary-and-cheat-sheet-multi-agent-systems-and-agentic-rag-with-langgraph)
   - [4. Extra: LangChain Deep Agents](#4-extra-langchain-deep-agents)
+    - [What Deep Agents Adds](#what-deep-agents-adds)
+    - [Deep Agents CLI: Terminal Agent Harness](#deep-agents-cli-terminal-agent-harness)
+    - [Core Capabilities](#core-capabilities)
+    - [Typical Deep Agent Architecture](#typical-deep-agent-architecture)
+    - [File-Based Context Management](#file-based-context-management)
+    - [Human Approval and Checkpointing](#human-approval-and-checkpointing)
+    - [Exercise: Deep Agents Lab](#exercise-deep-agents-lab)
+    - [Practical Guidance](#practical-guidance-1)
 
 
 ## 1. Introduction to LangGraph
@@ -3508,7 +3516,7 @@ See the previous section [Building Multi-Agent Systems with LangGraph](#building
 
 Sources:
 
-- [`assets/Deepagents.pdf`](./assets/Deepagents.pdf)
+- [Medium: LangChain Just Released Deep Agents -- And It Changes How You Build AI Systems](https://pub.towardsai.net/langchain-just-released-deep-agents-and-it-changes-how-you-build-ai-systems-cc2371b04714)
 - [LangChain Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [LangChain Deep Agents GitHub](https://github.com/langchain-ai/deepagents)
 - [LangChain Deep Agents Website](https://www.langchain.com/deep-agents)
