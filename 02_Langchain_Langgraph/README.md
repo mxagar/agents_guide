@@ -1,4 +1,4 @@
-# Building AI Agents and Agentic Workflows: Fundamentals of Building AI Agents
+# Building AI Agents and Agentic Workflows: Agentic AI with LangChain and LangGraph
 
 This is a compilation of notes from the Coursera Specialization [Building AI Agents and Agentic Workflows (IBM)](https://www.coursera.org/programs/deutsche-telekom-learning-program-ddjuh/specializations/building-ai-agents-and-agentic-workflows), which is composed of the following courses:
 
@@ -10,7 +10,7 @@ This folder contains notes of the second course: **Agentic AI with LangChain and
 
 Table of contents:
 
-- [Building AI Agents and Agentic Workflows: Fundamentals of Building AI Agents](#building-ai-agents-and-agentic-workflows-fundamentals-of-building-ai-agents)
+- [Building AI Agents and Agentic Workflows: Agentic AI with LangChain and LangGraph](#building-ai-agents-and-agentic-workflows-agentic-ai-with-langchain-and-langgraph)
   - [1. Introduction to LangGraph](#1-introduction-to-langgraph)
     - [Introduction to Agentic AI](#introduction-to-agentic-ai)
       - [Generative AI vs Agentic AI](#generative-ai-vs-agentic-ai)
@@ -75,6 +75,7 @@ Table of contents:
     - [Human Approval and Checkpointing](#human-approval-and-checkpointing)
     - [Exercise: Deep Agents Lab](#exercise-deep-agents-lab)
     - [Practical Guidance](#practical-guidance-1)
+  - [5. Agentic Frameworks and LangGraph Design Patterns for Effective AI Systems](#5-agentic-frameworks-and-langgraph-design-patterns-for-effective-ai-systems)
 
 
 ## 1. Introduction to LangGraph
@@ -3772,4 +3773,8 @@ The notebook tests the main Deep Agents features with a compact course-assistant
 * Restrict powerful tools with permissions, sandboxes, and interrupts.
 * Treat Deep Agents as a high-level harness, not a replacement for LangGraph. When you need exact state transitions, custom reducers, or deterministic routing, build directly in LangGraph.
 
+
+## 5. Agentic Frameworks and LangGraph Design Patterns for Effective AI Systems
+
+See next module: [`../03_CrewAI_AutoGen_BeeAI/README.md`](../03_CrewAI_AutoGen_BeeAI/README.md).
 
