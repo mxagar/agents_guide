@@ -1,0 +1,3 @@
+[submodule "02_Langchain_Langgraph/lab/05_docchat/docchat"]
+	path = 02_Langchain_Langgraph/lab/05_docchat/docchat
+	url = https://github.com/ibm-developer-skills-network/zzpwx-docchat.git

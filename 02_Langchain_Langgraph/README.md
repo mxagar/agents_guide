@@ -3203,11 +3203,306 @@ print(result["messages"][-1].content)
 
 Folder: [`lab/05_docchat/README.md`](./lab/05_docchat/README.md).
 
-Original repository: [docchat](https://github.com/ibm-developer-skills-network/zzpwx-docchat).
+Original repository: [docchat](https://github.com/ibm-developer-skills-network/zzpwx-docchat), included here as the [`lab/05_docchat/docchat`](./lab/05_docchat/docchat) Git submodule.
+
+DocChat is a multi-agent RAG application for asking questions over long, structured documents such as PDFs, Word documents, technical reports, and environmental reports. The exercise in [`Instructions.pdf`](./lab/05_docchat/Instructions.pdf) focuses on a verification-driven RAG workflow:
+
+* upload one or more documents through a Gradio UI
+* convert the documents to Markdown with Docling
+* split, deduplicate, and cache document chunks
+* build a hybrid retriever from BM25 keyword search and Chroma vector search
+* classify whether the question is answerable from the uploaded documents
+* generate a draft answer from retrieved context
+* verify the draft against the original context
+* loop back to research when verification finds unsupported claims, contradictions, or irrelevance
+
+Main code locations in the submodule:
+
+* [`app.py`](./lab/05_docchat/docchat/app.py): Gradio interface, example loading, file hashing, and session-level retriever reuse
+* [`document_processor/file_handler.py`](./lab/05_docchat/docchat/document_processor/file_handler.py): Docling conversion, heading-based Markdown splitting, cache management, and chunk deduplication
+* [`retriever/builder.py`](./lab/05_docchat/docchat/retriever/builder.py): Chroma vector retriever, BM25 retriever, and LangChain `EnsembleRetriever`
+* [`agents/workflow.py`](./lab/05_docchat/docchat/agents/workflow.py): LangGraph workflow with relevance, research, verification, and correction loop
+* [`agents/relevance_checker.py`](./lab/05_docchat/docchat/agents/relevance_checker.py): `CAN_ANSWER`, `PARTIAL`, and `NO_MATCH` classification
+* [`agents/research_agent.py`](./lab/05_docchat/docchat/agents/research_agent.py): draft answer generation from retrieved chunks
+* [`agents/verification_agent.py`](./lab/05_docchat/docchat/agents/verification_agent.py): groundedness, contradiction, unsupported-claim, and relevance checking
+
+Conceptual graph:
+
+```text
+START
+  |
+  v
+check_relevance -- no match --> END
+  |
+  v
+research
+  |
+  v
+verify -- unsupported / irrelevant --> research
+  |
+  v
+END
+```
+
+Current LangChain/LangGraph-style sketch of the same agentic RAG idea, using the real DocChat stack without the Gradio UI. The complete runnable version is in [`lab/05_docchat/05_docchat.ipynb`](./lab/05_docchat/05_docchat.ipynb).
+
+```python
+import os
+from pathlib import Path
+from typing import Literal
+from typing_extensions import TypedDict
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+from langchain_community.retrievers import BM25Retriever
+from langchain_community.vectorstores import Chroma
+from langchain_core.documents import Document
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_text_splitters import MarkdownHeaderTextSplitter
+from langgraph.graph import END, START, StateGraph
+
+load_dotenv()
+
+LAB_DIR = Path("02_Langchain_Langgraph/lab/05_docchat").resolve()
+DOCUMENT_PATH = LAB_DIR / "docchat" / "examples" / "google-2024-environmental-report.pdf"
+CHROMA_DIR = LAB_DIR / "chroma_docchat_notebook"
+HF_CACHE_DIR = LAB_DIR / ".hf_cache"
+HF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("HF_HOME", str(HF_CACHE_DIR))
+os.environ.setdefault("HF_HUB_CACHE", str(HF_CACHE_DIR / "hub"))
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini")
+EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+USE_OCR = True  # Set to False if RapidOCR model downloads are blocked by your proxy.
+FORCE_HF_NO_SYMLINKS = True  # Windows without Developer Mode/admin cannot create HF cache symlinks.
+
+if FORCE_HF_NO_SYMLINKS:
+    import huggingface_hub.file_download as hf_file_download
+
+    hf_file_download.are_symlinks_supported = lambda cache_dir=None: False
+
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
+
+if not os.getenv("OPENAI_API_KEY"):
+    raise RuntimeError("OPENAI_API_KEY is required for OpenAI embeddings and chat models.")
 
 
+def process_document(path: Path) -> list[Document]:
+    if USE_OCR:
+        converter = DocumentConverter()
+    else:
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.do_ocr = False
+        pipeline_options.do_table_structure = True
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
+        )
+    markdown = converter.convert(str(path)).document.export_to_markdown()
+    splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=[("#", "Header 1"), ("##", "Header 2")]
+    )
+    chunks = splitter.split_text(markdown)
+    for index, chunk in enumerate(chunks):
+        chunk.metadata.update({"source": path.name, "chunk_id": index})
+    return chunks
+
+
+chunks = process_document(DOCUMENT_PATH)
+
+embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
+vector_store = Chroma.from_documents(
+    documents=chunks,
+    embedding=embeddings,
+    persist_directory=str(CHROMA_DIR),
+    collection_name="docchat_google_environmental_report",
+)
+vector_retriever = vector_store.as_retriever(search_kwargs={"k": 8})
+
+bm25_retriever = BM25Retriever.from_documents(chunks)
+bm25_retriever.k = 8
+
+hybrid_retriever = EnsembleRetriever(
+    retrievers=[bm25_retriever, vector_retriever],
+    weights=[0.4, 0.6],
+)
+
+llm = ChatOpenAI(model=CHAT_MODEL, temperature=0)
+
+
+class RelevanceDecision(BaseModel):
+    label: Literal["CAN_ANSWER", "PARTIAL", "NO_MATCH"] = Field(
+        description="Whether the retrieved context can answer the question."
+    )
+    reason: str
+
+
+class VerificationDecision(BaseModel):
+    supported: Literal["YES", "NO"]
+    unsupported_claims: list[str]
+    contradictions: list[str]
+    relevant: Literal["YES", "NO"]
+    additional_details: str
+
+
+relevance_llm = llm.with_structured_output(RelevanceDecision)
+verification_llm = llm.with_structured_output(VerificationDecision)
+
+
+class DocChatState(TypedDict):
+    question: str
+    documents: list[Document]
+    relevance: Literal["CAN_ANSWER", "PARTIAL", "NO_MATCH"]
+    relevance_reason: str
+    draft_answer: str
+    verification_report: str
+    retry_count: int
+
+
+def serialize_docs(docs: list[Document], max_chars: int = 12000) -> str:
+    parts = []
+    total = 0
+    for doc in docs:
+        text = f"Source: {doc.metadata}\n{doc.page_content}"
+        if total + len(text) > max_chars:
+            break
+        parts.append(text)
+        total += len(text)
+    return "\n\n---\n\n".join(parts)
+
+
+def retrieve_node(state: DocChatState) -> dict:
+    return {"documents": hybrid_retriever.invoke(state["question"])}
+
+
+def check_relevance_node(state: DocChatState) -> dict:
+    decision = relevance_llm.invoke(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "Classify whether the retrieved context can answer the question. "
+                    "Use CAN_ANSWER, PARTIAL, or NO_MATCH."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question:\n{state['question']}\n\n"
+                    f"Retrieved context:\n{serialize_docs(state['documents'], max_chars=8000)}"
+                ),
+            },
+        ]
+    )
+    update = {"relevance": decision.label, "relevance_reason": decision.reason}
+    if decision.label == "NO_MATCH":
+        update["draft_answer"] = "This question is not related to the uploaded document context."
+    return update
+
+
+def research_node(state: DocChatState) -> dict:
+    response = llm.invoke(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are the DocChat research agent. Answer only from the provided context. "
+                    "Preserve numeric values, years, table labels, and units."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question:\n{state['question']}\n\n"
+                    f"Context:\n{serialize_docs(state['documents'], max_chars=14000)}"
+                ),
+            },
+        ]
+    )
+    return {"draft_answer": response.content}
+
+
+def verify_node(state: DocChatState) -> dict:
+    decision = verification_llm.invoke(
+        [
+            {
+                "role": "system",
+                "content": "Check whether the answer is supported by the context.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question:\n{state['question']}\n\n"
+                    f"Answer:\n{state['draft_answer']}\n\n"
+                    f"Context:\n{serialize_docs(state['documents'], max_chars=14000)}"
+                ),
+            },
+        ]
+    )
+    report = (
+        f"Supported: {decision.supported}\n"
+        f"Unsupported Claims: {decision.unsupported_claims or 'None'}\n"
+        f"Contradictions: {decision.contradictions or 'None'}\n"
+        f"Relevant: {decision.relevant}\n"
+        f"Additional Details: {decision.additional_details}"
+    )
+    retry_increment = 1 if decision.supported == "NO" or decision.relevant == "NO" else 0
+    return {"verification_report": report, "retry_count": state["retry_count"] + retry_increment}
+
+
+def route_after_relevance(state: DocChatState) -> Literal["research", "__end__"]:
+    return "research" if state["relevance"] in {"CAN_ANSWER", "PARTIAL"} else END
+
+
+def route_after_verification(state: DocChatState) -> Literal["research", "__end__"]:
+    report = state["verification_report"].lower()
+    failed = "supported: no" in report or "relevant: no" in report
+    return "research" if failed and state["retry_count"] < 2 else END
+
+
+builder = StateGraph(DocChatState)
+builder.add_node("retrieve", retrieve_node)
+builder.add_node("check_relevance", check_relevance_node)
+builder.add_node("research", research_node)
+builder.add_node("verify", verify_node)
+builder.add_edge(START, "retrieve")
+builder.add_edge("retrieve", "check_relevance")
+builder.add_conditional_edges("check_relevance", route_after_relevance)
+builder.add_edge("research", "verify")
+builder.add_conditional_edges("verify", route_after_verification)
+
+docchat_graph = builder.compile()
+
+result = docchat_graph.invoke(
+    {
+        "question": (
+            "Retrieve the data center PUE efficiency values in Singapore 2nd facility "
+            "in 2019 and 2022. Also retrieve regional average CFE in Asia Pacific in 2023."
+        ),
+        "documents": [],
+        "relevance": "NO_MATCH",
+        "relevance_reason": "",
+        "draft_answer": "",
+        "verification_report": "",
+        "retry_count": 0,
+    }
+)
+
+print(result["draft_answer"])
+print(result["verification_report"])
+```
+In the full DocChat app, retrieval happens before the graph invocation and is reused across questions until the uploaded file set changes. The graph itself coordinates the agentic part: relevance gating, answer drafting, verification, and retry.
 
 ### Summary and Cheat Sheet: Multi-Agent Systems and Agentic RAG with LangGraph
+
+See the previous section [Building Multi-Agent Systems with LangGraph](#building-multi-agent-systems-with-langgraph).
+
 
 ## 4. Extra: Deep Agents
 

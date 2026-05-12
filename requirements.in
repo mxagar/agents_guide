@@ -2,10 +2,14 @@ accelerate
 anthropic
 autopep8
 bitsandbytes
+chromadb
 datasets
+docling
+easyocr
 evaluate
+gradio
 hf_xet
-huggingface_hub
+huggingface_hub<1
 jupyter
 jupyterlab
 langchain
@@ -16,6 +20,7 @@ langchain-ibm
 langchain-openai
 langchain-community
 langchain-tavily
+langchain-text-splitters
 langgraph
 langfuse
 langsmith
@@ -30,9 +35,13 @@ pandas
 peft
 pip
 pydantic
+pydantic-settings
+pypdf
 pytest
+python-docx
 python-dotenv
 pytube
+rank-bm25
 safetensors
 scikit-learn
 seaborn
@@ -43,6 +52,7 @@ torch
 torchtext
 tqdm
 transformers[torch]
+typer<0.22
 umap-learn
 wikipedia
 wordcloud

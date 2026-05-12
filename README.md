@@ -52,6 +52,22 @@ OPENAI_API_KEY=your_openai_api_key
 ANTHROPIC_API_KEY=your_anthropic_api_key
 ```
 
+## Git Submodules
+
+Some exercises include upstream projects as Git submodules. Clone this repository with submodules when you want the lab code available immediately:
+
+```bash
+git clone --recurse-submodules <repo-url>
+```
+
+If you already cloned the repository, initialize or refresh the submodules with:
+
+```bash
+git submodule update --init --recursive
+```
+
+When a submodule should be moved to the commit recorded by this repository, run the same update command. When you intentionally update a submodule to a newer upstream commit, `cd` into the submodule, pull or checkout the desired commit, then commit the changed submodule pointer in the parent repository.
+
 ## Authorship
 
 Mikel Sagardia, 2026.  

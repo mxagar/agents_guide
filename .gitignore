@@ -210,3 +210,4 @@ __marimo__/
 .vscode
 requirements.txt
 .DS_Store
+.hf_cache
