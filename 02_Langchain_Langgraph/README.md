@@ -66,7 +66,7 @@ Table of contents:
       - [Building Multi-Agent Systems with LangGraph](#building-multi-agent-systems-with-langgraph)
       - [Exercise: DocChat -- Build a Multi-Agent RAG System](#exercise-docchat----build-a-multi-agent-rag-system)
     - [Summary and Cheat Sheet: Multi-Agent Systems and Agentic RAG with LangGraph](#summary-and-cheat-sheet-multi-agent-systems-and-agentic-rag-with-langgraph)
-  - [4. Extra: Deep Agents](#4-extra-deep-agents)
+  - [4. Extra: LangChain Deep Agents](#4-extra-langchain-deep-agents)
 
 
 ## 1. Introduction to LangGraph
@@ -3504,15 +3504,264 @@ In the full DocChat app, retrieval happens before the graph invocation and is re
 See the previous section [Building Multi-Agent Systems with LangGraph](#building-multi-agent-systems-with-langgraph).
 
 
-## 4. Extra: Deep Agents
+## 4. Extra: LangChain Deep Agents
 
-https://medium.com/towards-artificial-intelligence/langchain-just-released-deep-agents-and-it-changes-how-you-build-ai-systems-cc2371b04714
+Sources:
 
-https://docs.langchain.com/oss/python/deepagents/overview
+- [`assets/Deepagents.pdf`](./assets/Deepagents.pdf)
+- [LangChain Deep Agents Overview](https://docs.langchain.com/oss/python/deepagents/overview)
+- [LangChain Deep Agents GitHub](https://github.com/langchain-ai/deepagents)
+- [LangChain Deep Agents Website](https://www.langchain.com/deep-agents)
 
-https://github.com/langchain-ai/deepagents
+### What Deep Agents Adds
 
-https://www.langchain.com/deep-agents
+* Deep Agents is a **batteries-included agent harness** built on LangChain and LangGraph.
+* LangChain gives the model, messages, tools, and provider abstraction.
+* LangGraph gives the durable runtime: state, streaming, interrupts, checkpointing, and long-running execution.
+* Deep Agents adds the opinionated agent behavior that many complex agents need by default: planning, file-based context management, subagent delegation, and production-oriented controls.
+* Use Deep Agents when the task is complex, long-running, open-ended, or research/coding-like.
+* Use plain `create_agent(...)` or a small LangGraph workflow when the task is simple, deterministic, or does not need persistent working context.
 
+```python
+from deepagents import create_deep_agent
+
+def get_weather(city: str) -> str:
+    """Get weather for a city."""
+    return f"It is always sunny in {city}."
+
+agent = create_deep_agent(
+    model="openai:gpt-4o-mini",
+    tools=[get_weather],
+    system_prompt="You are a helpful assistant.",
+)
+
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "What is the weather in Madrid?"}]}
+)
+print(result["messages"][-1].content)
+```
+
+### Deep Agents CLI: Terminal Agent Harness
+
+* Deep Agents is both an SDK and a CLI.
+* The CLI is a terminal coding agent built on the same Deep Agents SDK.
+* It is in the same broad category as Claude Code, Cursor/Cowork-style coding agents, or other terminal agent harnesses: it can inspect project files, maintain working context, use tools, run commands through approved/sandboxed execution, and continue work across sessions.
+* The important distinction is that Deep Agents CLI is open source, provider-agnostic, and built on LangChain/LangGraph primitives.
+* Use the SDK when you want to embed an agent in your own Python application.
+* Use the CLI when you want an interactive coding/research agent in the terminal for a repository.
+
+Install the CLI:
+
+```bash
+# Quick install.
+curl -LsSf https://langch.in/gh-da-cli | bash
+
+# Or install directly with uv.
+uv tool install deepagents-cli
+
+# Install with extra providers.
+uv tool install "deepagents-cli[ollama,openrouter,groq]"
+```
+
+Run it interactively:
+
+```bash
+# Start the terminal UI in the current repository.
+deepagents
+
+# Choose a model explicitly.
+deepagents --model openai:gpt-4o
+
+# Use another configured agent profile.
+deepagents --agent mybot
+```
+
+Run it headlessly for scripts or CI-like jobs:
+
+```bash
+deepagents --headless "Inspect this repository and summarize the test strategy."
+
+deepagents --headless --model openai:gpt-4o \
+  "Add a unit test for the document parser and report the changed files."
+```
+
+Resume a previous session:
+
+```bash
+deepagents --resume
+```
+
+Typical CLI capabilities:
+
+* It streams responses in an interactive terminal UI.
+* It can keep persistent memory and project context across conversations.
+* It can use skills and custom agent profiles for repeated workflows.
+* It can use web search and remote sandboxes when configured.
+* It supports headless execution for automation.
+* It uses human-in-the-loop approval controls for sensitive tool calls.
+
+### Core Capabilities
+
+* **Planning** is built in through `write_todos`, so the agent can decompose work, mark steps as pending/in progress/completed, and adapt the plan as it learns.
+* **Virtual filesystem context** is built in through tools such as `ls`, `read_file`, `write_file`, `edit_file`, `glob`, and `grep`.
+* **Large context management** becomes easier because intermediate notes, drafts, search results, and reports can live in files instead of only in the model context window.
+* **Subagents** are built in through a `task` tool, so the main agent can delegate focused work to specialist agents with isolated context windows.
+* **Custom tools** work the same way as LangChain tools: define a Python function with a docstring or use `@tool`, then pass it to `create_deep_agent(...)`.
+* **Model neutrality** means the same harness can use OpenAI, Anthropic, Google, Ollama, OpenRouter, Fireworks, and other LangChain-supported chat model providers.
+* **Human-in-the-loop controls** can interrupt sensitive tool calls before they run.
+* **Permissions and backends** can restrict filesystem access or swap storage between in-memory state, local files, LangGraph stores, and sandboxed execution backends.
+* **LangGraph native output** means `create_deep_agent(...)` returns a compiled graph, so normal LangGraph patterns such as `.invoke(...)`, `.stream(...)`, checkpointing, debugging, and LangSmith tracing still apply.
+
+### Typical Deep Agent Architecture
+
+* The main agent acts as an orchestrator.
+* The todo list keeps the high-level plan visible and updatable.
+* The virtual filesystem stores long-lived artifacts such as `/research_notes.md`, `/draft.md`, and `/final_report.md`.
+* Specialist subagents research, critique, verify, or transform a bounded part of the task.
+* The final answer is produced after the main agent has gathered artifacts, checked them, and summarized the result.
+
+```python
+from deepagents import create_deep_agent
+
+def search_course_notes(query: str) -> str:
+    """Search the local course notes for a query."""
+    notes = {
+        "langgraph": "LangGraph models agent workflows as stateful graphs.",
+        "react": "ReAct alternates reasoning, action, observation, and final answer.",
+        "rag": "Agentic RAG can route, retrieve, draft, verify, and retry.",
+    }
+    return "\n".join(
+        f"- {key}: {value}"
+        for key, value in notes.items()
+        if query.lower() in key or query.lower() in value.lower()
+    ) or "No local note matched."
+
+research_subagent = {
+    "name": "course-researcher",
+    "description": "Use this agent to research one narrow LangChain or LangGraph topic.",
+    "system_prompt": (
+        "You are a careful research assistant. Search the course notes, "
+        "write compact findings, and state uncertainty clearly."
+    ),
+    "tools": [search_course_notes],
+}
+
+agent = create_deep_agent(
+    model="openai:gpt-4o-mini",
+    tools=[search_course_notes],
+    subagents=[research_subagent],
+    system_prompt=(
+        "You are a course assistant. Plan with todos, delegate narrow research "
+        "tasks to course-researcher, save notes to files, and produce a concise answer."
+    ),
+)
+
+result = agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Compare LangGraph ReAct agents and agentic RAG. "
+                    "Save notes to /comparison.md before answering."
+                ),
+            }
+        ]
+    }
+)
+
+print(result["messages"][-1].content)
+print(result.get("files", {}).keys())
+```
+
+### File-Based Context Management
+
+* File tools are not just for coding agents; they are a general context strategy.
+* A research agent can write raw findings to `/findings.md`, synthesize them in `/draft.md`, and keep the chat history short.
+* A coding agent can inspect files with `glob` and `grep`, patch a small subset, and run tests through a sandbox backend when execution is enabled.
+* A documentation agent can maintain reusable project knowledge in memory files and load specialized skills only when they are relevant.
+
+```python
+result = agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Create /outline.md with a five-bullet explanation of Deep Agents. "
+                    "Then read it back and improve the wording."
+                ),
+            }
+        ]
+    }
+)
+
+files = result.get("files", {})
+for path, file_info in files.items():
+    print(path)
+    print(file_info.get("content", "")[:500])
+```
+
+### Human Approval and Checkpointing
+
+* Deep Agents uses LangGraph interrupts for human approval workflows.
+* Use `interrupt_on` when a tool is powerful enough to need review, such as `write_file`, `edit_file`, or sandboxed `execute`.
+* Use a checkpointer when the agent may pause and later resume the same thread.
+
+```python
+from deepagents import create_deep_agent
+from langgraph.checkpoint.memory import MemorySaver
+
+reviewed_agent = create_deep_agent(
+    model="openai:gpt-4o-mini",
+    interrupt_on={
+        "write_file": True,
+        "edit_file": True,
+    },
+    checkpointer=MemorySaver(),
+)
+
+config = {"configurable": {"thread_id": "deepagents-demo"}}
+
+result = reviewed_agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Write a short project brief to /brief.md.",
+            }
+        ]
+    },
+    config=config,
+)
+
+if "__interrupt__" in result:
+    print("The agent paused for approval.")
+    print(result["__interrupt__"])
+```
+
+### Exercise: Deep Agents Lab
+
+Notebook: [`lab/06_deepagents.ipynb`](./lab/06_deepagents.ipynb).
+
+The notebook tests the main Deep Agents features with a compact course-assistant use case:
+
+* It loads `OPENAI_API_KEY` and optional `OPENAI_MODEL` from `.env`.
+* It creates local search and summarization tools over small LangChain/LangGraph course notes.
+* It builds a Deep Agent with custom instructions and a researcher subagent.
+* It asks the agent to plan, delegate, write notes to the virtual filesystem, and synthesize a final answer.
+* It inspects the returned messages, todos/state fields, and generated virtual files.
+* It demonstrates streaming from the compiled LangGraph app.
+* It shows a structured-output variant with Pydantic.
+* It shows a human-in-the-loop variant using `interrupt_on` and `MemorySaver`.
+
+### Practical Guidance
+
+* Start with `create_deep_agent(...)` when you need a capable default agent quickly.
+* Add tools before adding subagents; a subagent is useful only when the delegated work benefits from isolated context or a specialist prompt.
+* Use files for intermediate artifacts that would otherwise bloat the message history.
+* Keep subagent descriptions concrete because the main agent uses those descriptions to decide when to delegate.
+* Restrict powerful tools with permissions, sandboxes, and interrupts.
+* Treat Deep Agents as a high-level harness, not a replacement for LangGraph. When you need exact state transitions, custom reducers, or deterministic routing, build directly in LangGraph.
 
 

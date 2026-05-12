@@ -4,6 +4,7 @@ autopep8
 bitsandbytes
 chromadb
 datasets
+deepagents
 docling
 easyocr
 evaluate
