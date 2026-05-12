@@ -8,14 +8,14 @@ The main source has been the Coursera Specialization [Building AI Agents and Age
 - [Agentic AI with LangChain and LangGraph](https://www.coursera.org/programs/deutsche-telekom-learning-program-ddjuh/learn/agentic-ai-with-langchain-and-langgraph)
 - [Agentic AI with LangGraph, CrewAI, AutoGen and BeeAI](https://www.coursera.org/programs/deutsche-telekom-learning-program-ddjuh/learn/agentic-ai-with-langgraph-crewai-autogen-and-beeai)
 
+<!--
 Additionally, I have also taken notes from other courses/tutorials:
 
 - [Complete N8N and AI Automation Masterclass](https://www.udemy.com/course/complete-n8n/)
 - [AI Engineer Agentic Track: The Complete Agent & MCP Course](https://www.udemy.com/course/the-complete-agentic-ai-engineering-course/)
-
-<!--
-
-- Monitoring: LangSmith, LangFuse, etc.
+- [AI Engineer Core Track: LLM Engineering, RAG, QLoRA, Agents](https://www.udemy.com/course/llm-engineering-master-ai-and-large-language-models/)
+- [AI Engineer Production Track: Deploy LLMs & Agents at Scale](https://www.udemy.com/course/generative-and-agentic-ai-in-production/)
+- [LLM Observability and Cost Management: Langfuse, Monitoring](https://www.udemy.com/course/llm-observability-cost)
 - [Vector Databases for RAG: An Introduction](https://www.coursera.org/learn/vector-databases-for-rag-an-introduction)
 - [Advanced RAG with Vector Databases and Retrievers](https://www.coursera.org/learn/advanced-rag-with-vector-databases-and-retrievers)
 - [Build Multimodal Generative AI Applications (Coursera, IBM)](https://www.coursera.org/learn/build-multimodal-generative-ai-applications)
