@@ -3,6 +3,8 @@ anthropic
 autopep8
 bitsandbytes
 chromadb
+crewai
+crewai-tools
 datasets
 deepagents
 docling
@@ -47,6 +49,7 @@ safetensors
 scikit-learn
 seaborn
 sqlalchemy
+tavily-python
 tensorboard
 tiktoken
 torch

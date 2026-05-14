@@ -34,7 +34,17 @@ Table of Contents:
       - [Visualization](#visualization)
       - [Key Takeaway](#key-takeaway)
   - [2. CrewAI Fundamentals and Advanced Applications](#2-crewai-fundamentals-and-advanced-applications)
+    - [Introduction to CrewAI](#introduction-to-crewai)
+      - [Crew Core Concepts and Architecture](#crew-core-concepts-and-architecture)
+      - [Exercise: Building a CrewAI Workflow](#exercise-building-a-crewai-workflow)
+    - [Structured Outputs in CrewAI](#structured-outputs-in-crewai)
+    - [Functions and CrewAI](#functions-and-crewai)
+    - [Summary and Evaluation](#summary-and-evaluation)
+    - [Extra: Combining CrewAI with LangGraph](#extra-combining-crewai-with-langgraph)
   - [3. Alternative Agentic Frameworks: BeeAI and AutoGen (AG2)](#3-alternative-agentic-frameworks-beeai-and-autogen-ag2)
+    - [BeeAI Core Concepts and Architecture](#beeai-core-concepts-and-architecture)
+    - [AG2 (AutoGen) Core Concepts, Architecture and Conversation Patterns](#ag2-autogen-core-concepts-architecture-and-conversation-patterns)
+    - [Summary and Cheat Sheet: BeeAI and AG2](#summary-and-cheat-sheet-beeai-and-ag2)
   - [4. Extra: Pydantic AI](#4-extra-pydantic-ai)
 
 
@@ -1859,10 +1869,341 @@ display(Image(graph.get_graph().draw_mermaid_png()))
 
 ## 2. CrewAI Fundamentals and Advanced Applications
 
+### Introduction to CrewAI
 
+#### Crew Core Concepts and Architecture
+
+* CrewAI is a framework for building collaborative multi-agent AI workflows.
+  * A **crew** is a team of agents working together on one objective.
+  * An **agent** defines who does the work: role, goal, backstory, tools, and LLM.
+  * A **task** defines what work should be done and what output is expected.
+  * A **tool** lets an agent interact with external systems such as search, files, APIs, or databases. Can be used by agents or tasks.
+  * A **process** defines how tasks run, such as sequential execution or hierarchical management.
+* CrewAI is best suited when you want a role-based team abstraction rather than low-level graph control.
+  * Use CrewAI for research/reporting pipelines, content workflows, delegated analysis, and role-based collaboration.
+  * Use LangGraph when you need explicit state-machine control, custom routing, durable execution, or fine-grained graph logic.
+* The core runtime pattern is:
+  * define one or more `Agent` objects
+  * define one or more `Task` objects and assign each task to an agent
+  * assemble a `Crew` with agents, tasks, and a `Process`
+  * run the crew with `crew.kickoff(inputs={...})`
+  * inspect `result.raw`, `result.tasks_output`, and `result.token_usage`
+* Current CrewAI LLM configuration uses the `LLM` class or a provider/model string.
+  * OpenAI models use provider-prefixed names such as `openai/gpt-4o`.
+  * `OPENAI_API_KEY` can be loaded from the environment.
+  * Tools such as `SerperDevTool` may require their own keys, for example `SERPER_API_KEY`.
+* Sequential crews run tasks in order.
+  * Later tasks can use earlier task outputs as context.
+  * You can make that dependency explicit with `context=[previous_task]`.
+* Hierarchical crews are also supported.
+  * A manager coordinates task assignment and review.
+  * This is useful when work should be delegated more dynamically.
+
+![Crew Object](./assets/crew_object.png)
+
+```python
+from dotenv import load_dotenv
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai_tools import SerperDevTool
+
+load_dotenv()
+
+# OPENAI_API_KEY is read from the environment.
+# SERPER_API_KEY is also required if you use SerperDevTool.
+llm = LLM(
+    model="openai/gpt-4o",
+    temperature=0.2,
+)
+
+# https://serper.dev/
+# Google Search API
+# Other options:
+# from crewai_tools import TavilySearchTool
+# from crewai_tools import BraveWebSearchTool, BraveNewsSearchTool
+search_tool = SerperDevTool()
+
+researcher = Agent(
+    role="Senior Research Analyst",
+    goal="Find accurate, current, and useful insights about {topic}",
+    backstory=(
+        "You are an experienced technology research analyst. You are careful "
+        "with sources, good at identifying trends, and concise in your summaries."
+    ),
+    llm=llm,
+    tools=[search_tool],
+    verbose=True,
+    allow_delegation=False,
+)
+
+writer = Agent(
+    role="Technology Content Strategist",
+    goal="Turn research findings into clear, engaging, executive-ready content",
+    backstory=(
+        "You are a skilled technical writer who explains complex topics in a "
+        "practical, accessible way for business and engineering audiences."
+    ),
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+research_task = Task(
+    description=(
+        "Research the latest important developments about {topic}. Focus on "
+        "what changed recently, why it matters, and concrete examples."
+    ),
+    expected_output=(
+        "A concise research brief with key findings, examples, source-aware "
+        "observations, and practical implications."
+    ),
+    agent=researcher,
+)
+
+writing_task = Task(
+    description=(
+        "Using the research brief, write a polished short article about {topic}. "
+        "Make it clear, structured, and useful for a technical business audience."
+    ),
+    expected_output=(
+        "A well-structured article with a clear title, short introduction, "
+        "3-5 key sections, and a concise conclusion."
+    ),
+    agent=writer,
+    context=[research_task],
+)
+
+content_crew = Crew(
+    agents=[researcher, writer],
+    tasks=[research_task, writing_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+result = content_crew.kickoff(
+    inputs={"topic": "generative AI breakthroughs"}
+)
+
+print("Final answer:")
+print(result.raw)
+
+print("\nTask outputs:")
+for task_output in result.tasks_output:
+    print(task_output)
+    print("-" * 80)
+
+print("\nToken usage:")
+print(result.token_usage)
+```
+
+#### Exercise: Building a CrewAI Workflow
+
+Notebook: [`lab/03_CrewAI-101-v1.ipynb`](./lab/03_CrewAI-101-v1.ipynb).
+
+* The notebook builds a current CrewAI content workflow using OpenAI models, dotenv, and Tavily search.
+* Setup loads `.env` with `load_dotenv()`, initializes `LLM(model="openai/gpt-4o")`, and creates a `TavilySearchTool`.
+* The workflow defines three agents: a research analyst, a technology content strategist, and a social media strategist.
+* The research agent uses Tavily search to gather current information about the input topic.
+* The writer task uses `context=[research_task]` so the article is grounded in the research output.
+* The social task uses `context=[writer_task]` to generate LinkedIn and X/Twitter-ready posts.
+* The crew runs with `Process.sequential`, so the tasks execute as research -> writing -> social content.
+* The notebook inspects `result.raw`, `result.tasks_output`, and `result.token_usage`.
+* The original exercises are included and completed explicitly at the end: create the social media agent, create its task, then assemble and run the complete crew.
+* Tavily may offer free/trial usage, but CrewAI's `TavilySearchTool` normally expects `TAVILY_API_KEY` in the environment.
+
+Summary code from the notebook:
+
+```python
+# %% Cell 1
+from dotenv import load_dotenv
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai_tools import TavilySearchTool
+
+load_dotenv()
+
+# SWITCH OFF CrewAI's OpenTelemetry (OTEL) data gathering!
+import os
+os.environ["OTEL_SDK_DISABLED"] = "true"
+
+# %% Cell 2
+llm = LLM(
+    model="openai/gpt-4o",
+    temperature=0.2,
+)
+
+search_tool = TavilySearchTool()
+
+
+# %% Cell 3
+research_agent = Agent(
+    role="Senior Research Analyst",
+    goal="Find current, accurate, source-aware insights about {topic}",
+    backstory=(
+        "You are an experienced technology researcher. You identify relevant "
+        "developments, separate signal from hype, and summarize findings clearly."
+    ),
+    llm=llm,
+    tools=[search_tool],
+    verbose=True,
+    allow_delegation=False,
+)
+
+writer_agent = Agent(
+    role="Technology Content Strategist",
+    goal="Turn research findings into clear, useful, engaging long-form content",
+    backstory=(
+        "You are a technical content strategist who explains complex topics for "
+        "business and engineering audiences without losing important nuance."
+    ),
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+social_agent = Agent(
+    role="Social Media Strategist",
+    goal="Create concise platform-ready posts that amplify the article's main ideas",
+    backstory=(
+        "You are a digital storyteller who turns long-form technical content into "
+        "clear, engaging LinkedIn and X/Twitter posts."
+    ),
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+
+# %% Cell 4
+research_task = Task(
+    description=(
+        "Research the latest important developments about {topic}. Use Tavily "
+        "search to find current information. Focus on concrete examples, trends, "
+        "and practical implications."
+    ),
+    expected_output=(
+        "A concise research brief with key findings, recent examples, relevant "
+        "source-aware observations, and practical implications."
+    ),
+    agent=research_agent,
+)
+
+writer_task = Task(
+    description=(
+        "Using the research brief, write a polished short article about {topic}. "
+        "Make it clear, structured, and useful for a technical business audience."
+    ),
+    expected_output=(
+        "A well-structured article with a clear title, short introduction, 3-5 "
+        "key sections, and a concise conclusion."
+    ),
+    agent=writer_agent,
+    context=[research_task],
+)
+
+social_task = Task(
+    description=(
+        "Using the final article, create platform-ready social media content about {topic}. "
+        "Include 2 LinkedIn post options and 3 short X/Twitter-style posts."
+    ),
+    expected_output=(
+        "Two LinkedIn posts and three short X/Twitter posts with clear hooks, "
+        "practical takeaways, and no unsupported claims."
+    ),
+    agent=social_agent,
+    context=[writer_task],
+)
+
+
+# %% Cell 5
+content_crew = Crew(
+    agents=[research_agent, writer_agent, social_agent],
+    tasks=[research_task, writer_task, social_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+
+# %% Cell 6
+result = content_crew.kickoff(
+    inputs={"topic": "latest generative AI breakthroughs"}
+)
+
+print("Final output:\n")
+print(result.raw)
+
+
+# %% Cell 7
+print("Task outputs:\n")
+for index, task_output in enumerate(result.tasks_output, start=1):
+    print(f"Task {index}: {task_output.description}")
+    print(task_output.raw)
+    print("-" * 80)
+
+print("Token usage:")
+print(result.token_usage)
+
+
+# %% Cell 8
+exercise_social_agent = Agent(
+    role="Social Media Strategist",
+    goal="Generate engaging social media snippets based on the final article about {topic}",
+    backstory=(
+        "You are a digital storyteller who turns long-form technical content into "
+        "clear, engaging LinkedIn and X/Twitter posts that drive readers back to "
+        "the full article."
+    ),
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+
+# %% Cell 9
+exercise_social_task = Task(
+    description=(
+        "Summarize the article about {topic} into platform-ready social media content. "
+        "Create 2 LinkedIn post options and 3 concise X/Twitter-style posts. "
+        "Keep the tone professional, useful, and grounded in the article."
+    ),
+    expected_output=(
+        "Two LinkedIn post options and three X/Twitter-style posts with clear hooks, "
+        "practical takeaways, and no unsupported claims."
+    ),
+    agent=exercise_social_agent,
+    context=[writer_task],
+)
+
+
+# %% Cell 10
+exercise_crew = Crew(
+    agents=[research_agent, writer_agent, exercise_social_agent],
+    tasks=[research_task, writer_task, exercise_social_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+exercise_result = exercise_crew.kickoff(
+    inputs={"topic": "latest generative AI breakthroughs"}
+)
+
+print("Exercise final output:\n")
+print(exercise_result.raw)
+```
+
+### Structured Outputs in CrewAI
+
+### Functions and CrewAI
+
+### Summary and Evaluation
+
+### Extra: Combining CrewAI with LangGraph
 
 ## 3. Alternative Agentic Frameworks: BeeAI and AutoGen (AG2)
 
+### BeeAI Core Concepts and Architecture
+
+### AG2 (AutoGen) Core Concepts, Architecture and Conversation Patterns
+
+### Summary and Cheat Sheet: BeeAI and AG2
 
 ## 4. Extra: Pydantic AI
 
