@@ -20,6 +20,19 @@ Table of Contents:
       - [Exercise: Prompt Chaining, Routing and Parallelization Patterns in LangGraph](#exercise-prompt-chaining-routing-and-parallelization-patterns-in-langgraph)
       - [Exercise: Orchestration and Evaluation Patterns in LangGraph](#exercise-orchestration-and-evaluation-patterns-in-langgraph)
     - [Summary and Cheat Sheet: Agentic Frameworks and LangGraph Design Patterns](#summary-and-cheat-sheet-agentic-frameworks-and-langgraph-design-patterns)
+      - [Framework Setup](#framework-setup)
+      - [Core LangGraph Building Blocks](#core-langgraph-building-blocks)
+      - [Structured Output](#structured-output)
+      - [State And Node Functions](#state-and-node-functions)
+      - [Minimal Graph](#minimal-graph)
+      - [Pattern Cheat Sheet](#pattern-cheat-sheet)
+      - [Sequential Pattern](#sequential-pattern)
+      - [Routing Pattern](#routing-pattern)
+      - [Static Parallelization Pattern](#static-parallelization-pattern)
+      - [Dynamic Fan-Out With Send](#dynamic-fan-out-with-send)
+      - [Evaluator-Optimizer Loop](#evaluator-optimizer-loop)
+      - [Visualization](#visualization)
+      - [Key Takeaway](#key-takeaway)
   - [2. CrewAI Fundamentals and Advanced Applications](#2-crewai-fundamentals-and-advanced-applications)
   - [3. Alternative Agentic Frameworks: BeeAI and AutoGen (AG2)](#3-alternative-agentic-frameworks-beeai-and-autogen-ag2)
   - [4. Extra: Pydantic AI](#4-extra-pydantic-ai)
@@ -57,8 +70,8 @@ Table of Contents:
     * clearer debugging: failures are easier to isolate
 * Common collaboration patterns:
   * sequential pipelines:
-    * agent A → agent B → agent C
-    * example: research → writing → review
+    * agent A --> agent B --> agent C
+    * example: research --> writing --> review
   * evaluator-generator loops:
     * generator creates output
     * evaluator critiques/refines
@@ -282,8 +295,8 @@ Table of Contents:
 | Aspect | Sequential (Prompt Chaining) | Routing | Parallelization |
 | --- | --- | --- | --- |
 | Core idea | One agent's output becomes the next agent's input | A router agent decides which workflow branch to execute | Independent tasks run simultaneously, then outputs are merged |
-| Execution flow | Linear pipeline | Conditional branching | Fan-out → aggregation |
-| Example | Job description → resume summary → cover letter | Input classified as **translate** or **summarize**, then routed accordingly | English text translated in parallel into French, Spanish, Japanese, then merged |
+| Execution flow | Linear pipeline | Conditional branching | Fan-out --> aggregation |
+| Example | Job description --> resume summary --> cover letter | Input classified as **translate** or **summarize**, then routed accordingly | English text translated in parallel into French, Spanish, Japanese, then merged |
 | State contents | Intermediate outputs from each stage (`job_description`, `resume_summary`, `cover_letter`) | Input, routing decision, final output (`user_input`, `task_type`, `output`) | Shared input, per-task outputs, merged result (`text`, `french`, `spanish`, `japanese`, `combined_output`) |
 | LangGraph mechanism | `START`/node/`END` edges with `add_edge(...)` | `add_conditional_edges(...)` from a router node | Static fan-out with multiple edges, or dynamic fan-out with `Send(...)` + reducer |
 | Main benefit | Simplicity, modularity, easier debugging, task specialization | Dynamic task selection and flexible branching | Speed, concurrency, improved throughput |
@@ -1527,6 +1540,322 @@ print("\nFinal investment plan:\n", investment_result["investment_plan"])
 ```
 
 ### Summary and Cheat Sheet: Agentic Frameworks and LangGraph Design Patterns
+
+* Agentic design patterns are reusable workflow structures for coordinating LLM calls, tools, agents, and deterministic logic.
+* LangGraph is well suited for these patterns because the workflow is represented explicitly as a graph:
+  * **state** carries shared context between nodes
+  * **nodes** do work and return partial state updates
+  * **edges** define fixed transitions
+  * **conditional edges** define runtime routing, loops, and dynamic fan-out
+  * **reducers** define how concurrent updates to the same state key are merged
+* Current LangGraph examples should prefer:
+  * `StateGraph(...)` for graph construction
+  * `START` and `END` for entry/exit
+  * `add_edge(...)` for fixed transitions and fan-in
+  * `add_conditional_edges(...)` for routers, loops, and `Send(...)` fan-out
+  * `Send` from `langgraph.types` for runtime-created worker branches
+  * node functions that return partial dictionaries instead of mutating state in place
+* Current LangChain examples should prefer:
+  * `init_chat_model(..., model_provider="openai")` for model initialization
+  * `llm.with_structured_output(PydanticModel)` for schema-constrained model output
+  * `.env` loading with `python-dotenv` when credentials are stored locally
+
+#### Framework Setup
+
+```python
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+
+load_dotenv()
+
+llm = init_chat_model(
+    model="gpt-5.4",
+    model_provider="openai",
+    temperature=0,
+)
+```
+
+#### Core LangGraph Building Blocks
+
+| Component | Current API | Purpose |
+| --- | --- | --- |
+| State schema | `TypedDict` | Defines the graph's shared data contract |
+| Node | `builder.add_node("name", fn)` | Executes one processing step and returns partial state updates |
+| Fixed edge | `builder.add_edge("a", "b")` | Moves execution from one node to the next |
+| Entry edge | `builder.add_edge(START, "node")` | Starts the graph |
+| Exit edge | `builder.add_edge("node", END)` | Ends the graph |
+| Conditional edge | `builder.add_conditional_edges(...)` | Routes based on runtime state |
+| Static fan-out | multiple `add_edge(START, ...)` calls | Starts known parallel branches |
+| Fan-in | `add_edge(["a", "b"], "join")` | Waits for multiple nodes before continuing |
+| Dynamic fan-out | return `list[Send]` from a conditional edge | Creates worker branches at runtime |
+| Reducer | `Annotated[list[T], operator.add]` | Merges parallel updates to the same key |
+| Compile | `builder.compile()` | Produces an executable graph |
+| Invoke | `graph.invoke(input_state)` | Runs the graph |
+
+#### Structured Output
+
+* Use structured output when a downstream node depends on an LLM decision or parsed fields.
+* This is preferred over free-form parsing or manual extraction from tool calls for routing/evaluation examples.
+
+```python
+from typing import Literal
+from pydantic import BaseModel, Field
+
+class RouteDecision(BaseModel):
+    task_type: Literal["summarize", "translate"] = Field(
+        description="The workflow branch to run next."
+    )
+
+router_llm = llm.with_structured_output(RouteDecision)
+
+decision = router_llm.invoke("Classify this request: translate hello to French")
+print(decision.task_type)
+```
+
+#### State And Node Functions
+
+* State is the contract between graph nodes.
+* A node should read the state and return only the fields it updates.
+* LangGraph merges those partial updates into the current state.
+
+```python
+from typing import TypedDict
+
+class State(TypedDict):
+    input_text: str
+    output_text: str
+
+
+def worker_node(state: State) -> dict:
+    response = llm.invoke(f"Rewrite this clearly:\n\n{state['input_text']}")
+    return {"output_text": response.content.strip()}
+```
+
+#### Minimal Graph
+
+```python
+from langgraph.graph import START, END, StateGraph
+
+builder = StateGraph(State)
+builder.add_node("worker", worker_node)
+builder.add_edge(START, "worker")
+builder.add_edge("worker", END)
+
+graph = builder.compile()
+result = graph.invoke({"input_text": "Make this easier to read."})
+print(result["output_text"])
+```
+
+#### Pattern Cheat Sheet
+
+| Pattern | Use When | LangGraph Mechanism |
+| --- | --- | --- |
+| Prompt chaining / sequential | Steps are known and ordered | `START -> node_a -> node_b -> END` |
+| Routing | One branch should run based on input/state | `add_conditional_edges(router, route_fn, path_map)` |
+| Static parallelization | Branch count is known beforehand | Multiple edges from `START`, then fan-in with `add_edge([...], "join")` |
+| Dynamic parallelization | Branch count is known only at runtime | conditional edge returns `Send(...)` objects |
+| Orchestrator-worker | An LLM decomposes work into runtime tasks | orchestrator node + `Send` workers + reducer + synthesizer |
+| Evaluator-optimizer | Output should improve through feedback | generator -> evaluator -> conditional loop |
+
+![Orchestrator-Worker Pattern](./assets/orchestrator_worker_pattern.png)
+
+![Reflection Pattern](./assets/reflection_pattern.png)
+
+#### Sequential Pattern
+
+```python
+class ChainState(TypedDict):
+    topic: str
+    outline: str
+    draft: str
+
+
+def outline_node(state: ChainState) -> dict:
+    response = llm.invoke(f"Create an outline for: {state['topic']}")
+    return {"outline": response.content.strip()}
+
+
+def draft_node(state: ChainState) -> dict:
+    response = llm.invoke(f"Write a short draft from this outline:\n\n{state['outline']}")
+    return {"draft": response.content.strip()}
+
+builder = StateGraph(ChainState)
+builder.add_node("outline", outline_node)
+builder.add_node("draft", draft_node)
+builder.add_edge(START, "outline")
+builder.add_edge("outline", "draft")
+builder.add_edge("draft", END)
+chain = builder.compile()
+```
+
+#### Routing Pattern
+
+```python
+from typing import Literal
+
+class RouterState(TypedDict):
+    user_input: str
+    task_type: str
+    output: str
+
+class RouterDecision(BaseModel):
+    task_type: Literal["summarize", "translate"]
+
+router_llm = llm.with_structured_output(RouterDecision)
+
+
+def router_node(state: RouterState) -> dict:
+    decision = router_llm.invoke(f"Route this request: {state['user_input']}")
+    return {"task_type": decision.task_type}
+
+
+def route_task(state: RouterState) -> Literal["summarize", "translate"]:
+    return state["task_type"]
+
+builder = StateGraph(RouterState)
+builder.add_node("router", router_node)
+builder.add_node("summarize", lambda state: {"output": "summary"})
+builder.add_node("translate", lambda state: {"output": "translation"})
+builder.add_edge(START, "router")
+builder.add_conditional_edges(
+    "router",
+    route_task,
+    {"summarize": "summarize", "translate": "translate"},
+)
+builder.add_edge("summarize", END)
+builder.add_edge("translate", END)
+routing_graph = builder.compile()
+```
+
+#### Static Parallelization Pattern
+
+```python
+class ParallelState(TypedDict):
+    text: str
+    french: str
+    spanish: str
+    combined: str
+
+
+def french_node(state: ParallelState) -> dict:
+    return {"french": llm.invoke(f"Translate to French: {state['text']}").content.strip()}
+
+
+def spanish_node(state: ParallelState) -> dict:
+    return {"spanish": llm.invoke(f"Translate to Spanish:\n\n{state['text']}").content.strip()}
+
+
+def join_node(state: ParallelState) -> dict:
+    return {"combined": f"French: {state['french']}\nSpanish: {state['spanish']}"}
+
+builder = StateGraph(ParallelState)
+builder.add_node("french", french_node)
+builder.add_node("spanish", spanish_node)
+builder.add_node("join", join_node)
+builder.add_edge(START, "french")
+builder.add_edge(START, "spanish")
+builder.add_edge(["french", "spanish"], "join")
+builder.add_edge("join", END)
+parallel_graph = builder.compile()
+```
+
+#### Dynamic Fan-Out With Send
+
+```python
+import operator
+from typing import Annotated
+from langgraph.types import Send
+
+class DynamicState(TypedDict):
+    subjects: list[str]
+    jokes: Annotated[list[str], operator.add]
+
+class JokeState(TypedDict):
+    subject: str
+
+
+def fan_out(state: DynamicState) -> list[Send]:
+    return [Send("write_joke", {"subject": subject}) for subject in state["subjects"]]
+
+
+def write_joke(state: JokeState) -> dict:
+    return {"jokes": [llm.invoke(f"Write one joke about {state['subject']}").content.strip()]}
+
+builder = StateGraph(DynamicState)
+builder.add_node("write_joke", write_joke)
+builder.add_conditional_edges(START, fan_out)
+builder.add_edge("write_joke", END)
+dynamic_graph = builder.compile()
+```
+
+#### Evaluator-Optimizer Loop
+
+```python
+class EvalState(TypedDict):
+    request: str
+    draft: str
+    feedback: str
+    accepted: bool
+    iterations: int
+
+class Evaluation(BaseModel):
+    accepted: bool
+    feedback: str
+
+review_llm = llm.with_structured_output(Evaluation)
+MAX_ITERATIONS = 3
+
+
+def generate(state: EvalState) -> dict:
+    prompt = f"Request: {state['request']}\nFeedback: {state.get('feedback', '')}"
+    response = llm.invoke(f"Create or revise the answer.\n\n{prompt}")
+    return {"draft": response.content.strip()}
+
+
+def evaluate(state: EvalState) -> dict:
+    result = review_llm.invoke(f"Evaluate this draft:\n\n{state['draft']}")
+    return {
+        "accepted": result.accepted,
+        "feedback": result.feedback,
+        "iterations": state.get("iterations", 0) + 1,
+    }
+
+
+def route_eval(state: EvalState) -> Literal["done", "revise"]:
+    if state["accepted"] or state["iterations"] >= MAX_ITERATIONS:
+        return "done"
+    return "revise"
+
+builder = StateGraph(EvalState)
+builder.add_node("generate", generate)
+builder.add_node("evaluate", evaluate)
+builder.add_edge(START, "generate")
+builder.add_edge("generate", "evaluate")
+builder.add_conditional_edges(
+    "evaluate",
+    route_eval,
+    {"done": END, "revise": "generate"},
+)
+optimizer_graph = builder.compile()
+```
+
+#### Visualization
+
+```python
+from IPython.display import Image, display
+
+display(Image(graph.get_graph().draw_mermaid_png()))
+```
+
+#### Key Takeaway
+
+* Use prompt chaining for known ordered steps.
+* Use routing when the next step depends on classification or state.
+* Use static parallelization when the branch set is known.
+* Use `Send` when the branch set is generated at runtime.
+* Use reducers when parallel branches write to the same state key.
+* Use evaluator-optimizer loops when quality needs iterative feedback.
+* Keep graph state typed, node returns partial, and LLM decisions structured.
 
 ## 2. CrewAI Fundamentals and Advanced Applications
 
