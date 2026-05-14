@@ -38,6 +38,8 @@ Table of Contents:
       - [Crew Core Concepts and Architecture](#crew-core-concepts-and-architecture)
       - [Exercise: Building a CrewAI Workflow](#exercise-building-a-crewai-workflow)
     - [Structured Outputs in CrewAI](#structured-outputs-in-crewai)
+      - [CrewAI Structured Outputs, YAML and CrewBase](#crewai-structured-outputs-yaml-and-crewbase)
+      - [Exercise: Meal Planer with Structured Outputs and YAML Configuration](#exercise-meal-planer-with-structured-outputs-and-yaml-configuration)
     - [Functions and CrewAI](#functions-and-crewai)
     - [Summary and Evaluation](#summary-and-evaluation)
     - [Extra: Combining CrewAI with LangGraph](#extra-combining-crewai-with-langgraph)
@@ -1993,6 +1995,8 @@ for task_output in result.tasks_output:
 
 print("\nToken usage:")
 print(result.token_usage)
+
+
 ```
 
 #### Exercise: Building a CrewAI Workflow
@@ -2190,6 +2194,527 @@ print(exercise_result.raw)
 ```
 
 ### Structured Outputs in CrewAI
+
+#### CrewAI Structured Outputs, YAML and CrewBase
+
+* The video explains how to build a multi-agent meal planning system with CrewAI.
+* The workflow combines several CrewAI features:
+  * Structured outputs with Pydantic.
+  * YAML-based agent and task definitions.
+  * `@CrewBase` classes.
+  * Sequential multi-agent execution.
+  * Shared LLM usage.
+  * External tools such as Tavily web search.
+* The meal planning system uses five specialized agents:
+  * A meal planner.
+  * A shopping organizer.
+  * A budget advisor.
+  * A leftovers manager.
+  * A summary agent.
+* Each agent has a clear responsibility.
+  * The meal planner finds recipes based on dietary needs and budget.
+  * The shopping organizer converts meal ingredients into a structured shopping list.
+  * The budget advisor checks whether the plan stays within budget and suggests savings.
+  * The leftovers manager suggests ways to reuse leftover ingredients.
+  * The summary agent combines all previous outputs into a final meal planning guide.
+* The agents run sequentially.
+  * The output of one task becomes context for the next task.
+  * This allows the workflow to build progressively:
+    * Meal planning.
+    * Shopping organization.
+    * Budget checking.
+    * Leftover planning.
+    * Final summary.
+* A shared LLM powers all agents.
+  * In this updated example, the workflow uses OpenAI through CrewAI's `LLM` class.
+  * The same LLM is passed to each agent.
+  * This keeps reasoning consistent across the workflow.
+* Pydantic is used to enforce structured outputs.
+  * This ensures that agents return clean, validated, reusable data.
+  * Structured outputs are important because later agents depend on earlier outputs.
+  * Instead of passing unstructured text, agents exchange typed objects.
+* The main Pydantic models are:
+  * `GroceryItem`.
+  * `MealPlan`.
+  * `ShoppingCategory`.
+  * `GroceryShoppingPlan`.
+* `GroceryItem` represents a single item in the shopping list.
+  * It includes:
+    * Item name.
+    * Quantity.
+    * Estimated price.
+    * Store category.
+* `MealPlan` represents a complete meal.
+  * It includes:
+    * Meal name.
+    * Cooking difficulty.
+    * Number of servings.
+    * Ingredients.
+* `ShoppingCategory` groups grocery items by store section.
+  * For example:
+    * Produce.
+    * Meat.
+    * Dairy.
+    * Pantry.
+  * It also includes a total estimated cost for that section.
+* `GroceryShoppingPlan` combines the complete shopping and meal plan.
+  * It includes:
+    * Total budget.
+    * A list of meal plans.
+    * Shopping categories.
+    * Shopping tips.
+  * It provides a structured view of recipes, ingredients, store navigation, and budget tracking.
+* Some agents use tools.
+  * The meal planner uses Tavily web search to find current recipe ideas.
+  * The budget advisor uses Tavily web search to estimate prices and savings ideas.
+  * The shopping organizer does not need external tools because it works from the meal plan context.
+* Tasks can specify structured outputs.
+  * The meal planning task uses `output_pydantic=MealPlan`.
+  * The shopping organizer task uses `output_pydantic=GroceryShoppingPlan`.
+  * This forces the LLM output into predefined Pydantic schemas.
+* Outputs can be saved to files.
+  * Shopping-related outputs can be saved as `.json`.
+  * The budget guide or final guide can be saved as `.md`.
+  * The format depends on the needs of the task.
+* YAML is introduced to separate configuration from Python code.
+  * Instead of defining every agent and task directly in Python, agents and tasks can be described in YAML files.
+  * This makes the system easier to update.
+  * You can change an agent’s role, goal, backstory, or task description without editing Python logic.
+  * The main advantage is separation of concerns:
+    * YAML stores prompt-like configuration that changes often.
+    * Python stores reusable orchestration logic, tools, structured-output schemas, and custom behavior.
+  * YAML is useful when non-engineers may tune agent/task wording, when prompts need review, or when the same crew structure should run with different configurations.
+  * YAML is not required for small notebooks or quick experiments; direct Python definitions are usually simpler there.
+* The leftovers agent is defined using YAML.
+  * The YAML file contains the agent’s role, goal, and backstory.
+  * Another YAML entry defines the leftover task.
+  * This demonstrates how CrewAI can load components from configuration files.
+* `@CrewBase` is used to connect YAML configuration with Python.
+  * A class marked with `@CrewBase` becomes a crew container.
+  * CrewAI decorators such as `@agent`, `@task`, and `@crew` define the components.
+  * Methods decorated with `@agent` or `@task` return valid CrewAI objects.
+  * CrewBase can automatically locate the config folder.
+  * The decorators also let CrewAI collect agents and tasks automatically, so the final `@crew` method can assemble `self.agents` and `self.tasks`.
+  * This pattern is helpful for larger projects because it keeps the crew definition organized, reusable, and closer to the structure generated by CrewAI project scaffolding.
+* In Jupyter Notebook, the CrewBase class should be defined in a separate Python file.
+  * Then it can be imported into the notebook.
+  * This avoids issues with how CrewBase loads configuration.
+* The final workflow creates a complete grocery crew.
+  * It can combine agents defined in Python and agents defined in YAML; the code below uses a Python-first version for notebook readability.
+  * It runs all tasks sequentially.
+  * It starts with `.kickoff()` and user inputs such as dietary needs, budget, and preferences.
+  * The final result is a complete meal planning guide.
+* The main takeaway is that CrewAI can combine:
+  * Multi-agent workflows.
+  * Structured outputs.
+  * Tool usage.
+  * YAML configuration.
+  * Reusable CrewBase classes when YAML-based configuration is useful.
+  * Sequential execution.
+  * Final report generation.
+
+![Crew Meals Example](./assets/crew_meals_example.png)
+
+![Crew Meals Class Tree](./assets/crew_meals_example_class_tree.png)
+
+Python-first version for notebooks and quick experiments:
+
+```python
+from typing import List
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai_tools import TavilySearchTool
+
+load_dotenv()
+
+# OPENAI_API_KEY is read from the environment.
+# TavilySearchTool normally expects TAVILY_API_KEY in the environment.
+llm = LLM(
+    model="openai/gpt-4o",
+    temperature=0.2,
+)
+
+search_tool = TavilySearchTool()
+
+
+# ============================================================
+# 1. Define Pydantic structured output models
+# ============================================================
+
+class GroceryItem(BaseModel):
+    """One item in a grocery list."""
+
+    name: str = Field(description="Name of the grocery item.")
+    quantity: str = Field(description="Amount needed, including units when useful.")
+    estimated_price: float = Field(description="Estimated item price.")
+    store_category: str = Field(description="Store section, such as Produce or Pantry.")
+
+
+class MealPlan(BaseModel):
+    """One planned meal."""
+
+    meal_name: str = Field(description="Name of the meal.")
+    cooking_difficulty: str = Field(description="Easy, medium, or advanced.")
+    servings: int = Field(description="Number of servings.")
+    ingredients: List[GroceryItem] = Field(description="Ingredients required for the meal.")
+
+
+class ShoppingCategory(BaseModel):
+    """A store section containing related grocery items."""
+
+    section_name: str = Field(description="Store section name.")
+    items: List[GroceryItem] = Field(description="Items in this store section.")
+    total_estimated_cost: float = Field(description="Estimated cost for this section.")
+
+
+class GroceryShoppingPlan(BaseModel):
+    """Complete structured shopping plan."""
+
+    total_budget: float = Field(description="User budget as a number.")
+    meal_plans: List[MealPlan] = Field(description="Meals included in the plan.")
+    shopping_categories: List[ShoppingCategory] = Field(description="Items grouped by store section.")
+    shopping_tips: List[str] = Field(description="Practical budget and shopping tips.")
+
+
+# ============================================================
+# 2. Define agents
+# ============================================================
+
+meal_planner = Agent(
+    role="Meal Planner",
+    goal="Create realistic meals matching the user's budget, servings, diet, and preferences",
+    backstory=(
+        "You are an expert meal planner who designs affordable, practical, "
+        "balanced meals for busy households."
+    ),
+    llm=llm,
+    tools=[search_tool],
+    verbose=True,
+    allow_delegation=False,
+)
+
+shopping_organizer = Agent(
+    role="Shopping Organizer",
+    goal="Convert meal ingredients into a categorized, budget-aware grocery plan",
+    backstory=(
+        "You are highly organized and know how to group groceries by store section "
+        "to make shopping faster and easier."
+    ),
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+budget_advisor = Agent(
+    role="Budget Advisor",
+    goal="Check whether the shopping plan fits the budget and suggest savings",
+    backstory=(
+        "You are a practical household budget advisor who reduces grocery costs "
+        "without sacrificing nutrition or quality."
+    ),
+    llm=llm,
+    tools=[search_tool],
+    verbose=True,
+    allow_delegation=False,
+)
+
+summary_agent = Agent(
+    role="Meal Planning Summary Writer",
+    goal="Compile meal, shopping, and budget details into one usable guide",
+    backstory="You create clear, practical household planning guides.",
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+
+# ============================================================
+# 3. Define structured-output tasks
+# ============================================================
+
+meal_planning_task = Task(
+    description=(
+        "Create a meal plan from these inputs:\n"
+        "- Dietary needs: {dietary_needs}\n"
+        "- Budget: {budget}\n"
+        "- Number of servings: {servings}\n"
+        "- Food preferences: {food_preferences}\n\n"
+        "Use Tavily search if useful for current recipe ideas."
+    ),
+    expected_output=(
+        "A structured meal plan with a meal name, difficulty, servings, "
+        "and grocery ingredients."
+    ),
+    agent=meal_planner,
+    output_pydantic=MealPlan,
+    output_file="meal_plan.json",
+)
+
+shopping_task = Task(
+    description=(
+        "Using the meal plan, create a structured grocery shopping plan. "
+        "Group items by store section, estimate costs, and include practical shopping tips."
+    ),
+    expected_output="A complete structured grocery shopping plan.",
+    agent=shopping_organizer,
+    context=[meal_planning_task],
+    output_pydantic=GroceryShoppingPlan,
+    output_file="shopping_list.json",
+)
+
+budget_task = Task(
+    description=(
+        "Analyze whether the meal plan and grocery shopping plan fit the budget of {budget}. "
+        "Use Tavily search if useful for current savings ideas or price context. "
+        "Suggest substitutions and practical cost-saving changes."
+    ),
+    expected_output="A markdown budget analysis with estimated costs and savings recommendations.",
+    agent=budget_advisor,
+    context=[meal_planning_task, shopping_task],
+    output_file="shopping_budget_guide.md",
+)
+
+summary_task = Task(
+    description=(
+        "Create a complete meal planning guide using the meal plan, shopping list, "
+        "and budget analysis."
+    ),
+    expected_output="A complete, well-structured meal planning guide in markdown format.",
+    agent=summary_agent,
+    context=[meal_planning_task, shopping_task, budget_task],
+    output_file="final_meal_planning_guide.md",
+)
+
+
+# ============================================================
+# 4. Assemble and run the crew
+# ============================================================
+
+meal_planning_crew = Crew(
+    agents=[meal_planner, shopping_organizer, budget_advisor, summary_agent],
+    tasks=[meal_planning_task, shopping_task, budget_task, summary_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+result = meal_planning_crew.kickoff(
+    inputs={
+        "dietary_needs": "high-protein, no shellfish",
+        "budget": "60 euros",
+        "servings": 4,
+        "food_preferences": "Mediterranean and easy weeknight meals",
+    }
+)
+
+print("Final meal planning guide:")
+print(result.raw)
+
+print("\nIndividual task outputs:")
+for task_output in result.tasks_output:
+    print(task_output)
+    print("-" * 80)
+
+print("\nToken usage:")
+print(result.token_usage)
+```
+
+CrewBase/decorator version for a project layout:
+
+```python
+# ============================================================
+# 5. Optional CrewBase/decorator version for YAML configuration
+# ============================================================
+# In a real project, put this class in a Python module such as crew.py,
+# and put agent/task configuration in config/agents.yaml and config/tasks.yaml.
+# The decorators connect YAML configuration to Python objects.
+
+from crewai.agents.agent_builder.base_agent import BaseAgent
+from crewai.project import CrewBase, agent, crew, task
+
+
+@CrewBase
+class MealPlanningCrew:
+    """Meal planning crew configured with CrewAI decorators."""
+
+    agents: List[BaseAgent]
+    tasks: List[Task]
+
+    agents_config = "config/agents.yaml"
+    tasks_config = "config/tasks.yaml"
+
+    @agent
+    def meal_planner(self) -> Agent:
+        return Agent(
+            config=self.agents_config["meal_planner"],  # type: ignore[index]
+            llm=llm,
+            tools=[search_tool],
+            verbose=True,
+        )
+
+    @agent
+    def shopping_organizer(self) -> Agent:
+        return Agent(
+            config=self.agents_config["shopping_organizer"],  # type: ignore[index]
+            llm=llm,
+            verbose=True,
+        )
+
+    @agent
+    def budget_advisor(self) -> Agent:
+        return Agent(
+            config=self.agents_config["budget_advisor"],  # type: ignore[index]
+            llm=llm,
+            tools=[search_tool],
+            verbose=True,
+        )
+
+    @agent
+    def summary_agent(self) -> Agent:
+        return Agent(
+            config=self.agents_config["summary_agent"],  # type: ignore[index]
+            llm=llm,
+            verbose=True,
+        )
+
+    @task
+    def meal_planning_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["meal_planning_task"],  # type: ignore[index]
+            output_pydantic=MealPlan,
+            output_file="meal_plan.json",
+        )
+
+    @task
+    def shopping_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["shopping_task"],  # type: ignore[index]
+            output_pydantic=GroceryShoppingPlan,
+            output_file="shopping_list.json",
+        )
+
+    @task
+    def budget_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["budget_task"],  # type: ignore[index]
+            output_file="shopping_budget_guide.md",
+        )
+
+    @task
+    def summary_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["summary_task"],  # type: ignore[index]
+            output_file="final_meal_planning_guide.md",
+        )
+
+    @crew
+    def crew(self) -> Crew:
+        return Crew(
+            agents=self.agents,
+            tasks=self.tasks,
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+# Example usage when config/agents.yaml and config/tasks.yaml exist:
+# decorated_result = MealPlanningCrew().crew().kickoff(
+#     inputs={
+#         "dietary_needs": "high-protein, no shellfish",
+#         "budget": "60 euros",
+#         "servings": 4,
+#         "food_preferences": "Mediterranean and easy weeknight meals",
+#     }
+# )
+```
+
+YAML configuration used by the `CrewBase` example:
+
+```yaml
+# config/agents.yaml
+meal_planner:
+  role: Meal Planner
+  goal: Create realistic meals matching the user's budget, servings, diet, and preferences
+  backstory: >
+    You are an expert meal planner who designs affordable, practical,
+    balanced meals for busy households.
+
+shopping_organizer:
+  role: Shopping Organizer
+  goal: Convert meal ingredients into a categorized, budget-aware grocery plan
+  backstory: >
+    You are highly organized and know how to group groceries by store section
+    to make shopping faster and easier.
+
+budget_advisor:
+  role: Budget Advisor
+  goal: Check whether the shopping plan fits the budget and suggest savings
+  backstory: >
+    You are a practical household budget advisor who reduces grocery costs
+    without sacrificing nutrition or quality.
+
+summary_agent:
+  role: Meal Planning Summary Writer
+  goal: Compile meal, shopping, and budget details into one usable guide
+  backstory: You create clear, practical household planning guides.
+```
+
+```yaml
+# config/tasks.yaml
+meal_planning_task:
+  description: >
+    Create a meal plan from these inputs:
+    - Dietary needs: {dietary_needs}
+    - Budget: {budget}
+    - Number of servings: {servings}
+    - Food preferences: {food_preferences}
+
+    Use Tavily search if useful for current recipe ideas.
+  expected_output: >
+    A structured meal plan with a meal name, difficulty, servings,
+    and grocery ingredients.
+  agent: meal_planner
+
+shopping_task:
+  description: >
+    Using the meal plan, create a structured grocery shopping plan.
+    Group items by store section, estimate costs, and include practical shopping tips.
+  expected_output: A complete structured grocery shopping plan.
+  agent: shopping_organizer
+  context:
+    - meal_planning_task
+
+budget_task:
+  description: >
+    Analyze whether the meal plan and grocery shopping plan fit the budget of {budget}.
+    Use Tavily search if useful for current savings ideas or price context.
+    Suggest substitutions and practical cost-saving changes.
+  expected_output: A markdown budget analysis with estimated costs and savings recommendations.
+  agent: budget_advisor
+  context:
+    - meal_planning_task
+    - shopping_task
+
+summary_task:
+  description: >
+    Create a complete meal planning guide using the meal plan, shopping list,
+    and budget analysis.
+  expected_output: A complete, well-structured meal planning guide in markdown format.
+  agent: summary_agent
+  context:
+    - meal_planning_task
+    - shopping_task
+    - budget_task
+```
+
+#### Exercise: Meal Planer with Structured Outputs and YAML Configuration
+
+Notebook: [`lab/04_crewai_structured/04_meal_planner_structured.ipynb`](./lab/04_crewai_structured/04_meal_planner_structured.ipynb).
+
+
+
 
 ### Functions and CrewAI
 
