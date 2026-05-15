@@ -40,7 +40,9 @@ Table of Contents:
     - [Structured Outputs in CrewAI](#structured-outputs-in-crewai)
       - [CrewAI Structured Outputs, YAML and CrewBase](#crewai-structured-outputs-yaml-and-crewbase)
       - [Exercise: Meal Planer with Structured Outputs and YAML Configuration](#exercise-meal-planer-with-structured-outputs-and-yaml-configuration)
+      - [Summary: Structured Outputs in CrewAI](#summary-structured-outputs-in-crewai)
     - [Functions and CrewAI](#functions-and-crewai)
+      - [Extending CrewAI with Custom Functions](#extending-crewai-with-custom-functions)
     - [Summary and Evaluation](#summary-and-evaluation)
     - [Extra: Combining CrewAI with LangGraph](#extra-combining-crewai-with-langgraph)
   - [3. Alternative Agentic Frameworks: BeeAI and AutoGen (AG2)](#3-alternative-agentic-frameworks-beeai-and-autogen-ag2)
@@ -2981,10 +2983,194 @@ leftover_task:
   agent: leftover_manager
 ```
 
+#### Summary: Structured Outputs in CrewAI
+
+* Structured outputs turn LLM responses into predictable data objects instead of free-form text.
+* CrewAI supports structured task results with Pydantic schemas attached to `Task`.
+* Use `output_pydantic=ModelName` when you want the task result as a validated Pydantic object.
+* Use `output_json=ModelName` when you want CrewAI to produce schema-shaped JSON/dictionary output.
+* Pydantic models define the task contract: required fields, field types, nested objects, lists, optional values, and validation rules.
+* Structured outputs make multi-agent workflows more reliable because one task's output can be safely passed into later tasks through `context=[...]`.
+* The task output can expose:
+  * `raw` for the original model text
+  * `json_dict` for JSON/dict output
+  * `pydantic` for validated Pydantic output
+* YAML can describe agent and task prompts, but Python should attach Pydantic classes because schemas are executable Python objects.
+* `@CrewBase`, `@agent`, `@task`, and `@crew` are useful when you want YAML-editable configuration plus Python-defined schemas, tools, and orchestration.
+* Structured outputs reduce fragile parsing code and make CrewAI results easier to save, test, display, pass to APIs, or hand to downstream agents.
+
+Basic Pydantic schema:
+
+```python
+from pydantic import BaseModel, Field
 
 
+class BlogSummary(BaseModel):
+    title: str = Field(description="Short title for the blog post")
+    content: str = Field(description="Concise blog summary")
+```
+
+Nested schema for richer task output:
+
+```python
+from typing import List
+
+from pydantic import BaseModel, Field
+
+
+class Ingredient(BaseModel):
+    name: str = Field(description="Ingredient name")
+    quantity: str = Field(description="Amount needed")
+
+
+class MealPlan(BaseModel):
+    meal_name: str = Field(description="Name of the meal")
+    servings: int = Field(description="Number of servings")
+    ingredients: List[Ingredient] = Field(description="Ingredients needed for the meal")
+```
+
+CrewAI task with `output_pydantic`:
+
+```python
+from crewai import Agent, Crew, LLM, Process, Task
+from dotenv import load_dotenv
+
+load_dotenv()
+
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+
+blog_agent = Agent(
+    role="Blog Content Generator",
+    goal="Create concise structured blog summaries",
+    backstory="You write clear summaries with consistent fields for downstream systems.",
+    llm=llm,
+    verbose=False,
+)
+
+blog_task = Task(
+    description="Create a blog title and short content about {topic}.",
+    expected_output="A title and concise content matching the BlogSummary schema.",
+    agent=blog_agent,
+    output_pydantic=BlogSummary,
+)
+
+crew = Crew(
+    agents=[blog_agent],
+    tasks=[blog_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+result = crew.kickoff(inputs={"topic": "structured outputs in agentic workflows"})
+
+print(result.raw)
+print(blog_task.output.pydantic.title)
+print(blog_task.output.pydantic.content)
+```
+
+CrewAI task with `output_json`:
+
+```python
+json_task = Task(
+    description="Create a blog title and short content about {topic}.",
+    expected_output="A JSON object with title and content fields.",
+    agent=blog_agent,
+    output_json=BlogSummary,
+)
+
+json_crew = Crew(
+    agents=[blog_agent],
+    tasks=[json_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+json_crew.kickoff(inputs={"topic": "Pydantic schemas"})
+
+print(json_task.output.raw)
+print(json_task.output.json_dict["title"])
+```
+
+CrewBase with YAML configuration and a Python schema:
+
+```python
+from typing import List
+
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai.agents.agent_builder.base_agent import BaseAgent
+from crewai.project import CrewBase, agent, crew, task
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+load_dotenv()
+
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+
+
+class BlogSummary(BaseModel):
+    title: str = Field(description="Short title for the blog post")
+    content: str = Field(description="Concise blog summary")
+
+
+@CrewBase
+class BlogCrew:
+    agents: List[BaseAgent]
+    tasks: List[Task]
+
+    agents_config = "config/agents.yaml"
+    tasks_config = "config/tasks.yaml"
+
+    @agent
+    def blog_agent(self) -> Agent:
+        return Agent(
+            config=self.agents_config["blog_agent"],
+            llm=llm,
+            verbose=False,
+        )
+
+    @task
+    def blog_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["blog_task"],
+            output_pydantic=BlogSummary,
+        )
+
+    @crew
+    def crew(self) -> Crew:
+        return Crew(
+            agents=self.agents,
+            tasks=self.tasks,
+            process=Process.sequential,
+            verbose=True,
+        )
+```
+
+YAML configuration:
+
+```yaml
+# config/agents.yaml
+blog_agent:
+  role: Blog Content Generator
+  goal: Create concise structured blog summaries
+  backstory: >
+    You write clear summaries with consistent fields for downstream systems.
+```
+
+```yaml
+# config/tasks.yaml
+blog_task:
+  description: >
+    Create a blog title and short content about {topic}.
+  expected_output: >
+    A title and concise content matching the BlogSummary schema.
+  agent: blog_agent
+```
 
 ### Functions and CrewAI
+
+#### Extending CrewAI with Custom Functions
+
+
 
 ### Summary and Evaluation
 
