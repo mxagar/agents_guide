@@ -1,6 +1,7 @@
 accelerate
 anthropic
 autopep8
+beeai-framework[wikipedia]
 bitsandbytes
 chromadb
 crewai
