@@ -1,0 +1,8 @@
+leftover_task:
+  description: >
+    Review the meal plan, shopping list, and budget guidance for '{meal_name}' serving {servings} people.
+    Suggest how to store likely leftovers safely, what ingredients can be reused, and 2-3 simple follow-up meal ideas.
+    Consider dietary restrictions: {dietary_restrictions} and cooking skill level: {cooking_skill}.
+  expected_output: >
+    A practical leftover management plan with storage tips, reuse ideas, and simple follow-up meals.
+  agent: leftover_manager

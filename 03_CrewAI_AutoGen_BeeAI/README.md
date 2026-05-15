@@ -2713,6 +2713,274 @@ summary_task:
 
 Notebook: [`lab/04_crewai_structured/04_meal_planner_structured.ipynb`](./lab/04_crewai_structured/04_meal_planner_structured.ipynb).
 
+* The notebook builds a structured meal and grocery planning workflow with CrewAI.
+* It defines Pydantic schemas for grocery items, meal plans, store sections, complete shopping plans, and weekly meal planning.
+* It uses `python-dotenv` to load `OPENAI_API_KEY` and `TAVILY_API_KEY` from `.env`.
+* It initializes CrewAI's current `LLM` interface with an OpenAI model: `LLM(model="openai/gpt-4o")`.
+* It uses `TavilySearchTool` for current recipe, ingredient, substitution, and budget research.
+* It creates a sequential CrewAI workflow with specialized agents:
+  * meal planner and recipe researcher
+  * shopping organizer
+  * budget advisor
+  * YAML-backed leftover manager
+  * report compiler
+* It demonstrates structured task outputs with `output_pydantic`.
+* It demonstrates YAML configuration with `@CrewBase`, `@agent`, `@task`, and `@crew`.
+* The exercises are completed:
+  * a nutrition analyst agent and task are added to the workflow
+  * weekly meal planning Pydantic models are implemented and tested
+
+Summary code:
+
+```python
+import os
+from enum import Enum
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai.agents.agent_builder.base_agent import BaseAgent
+from crewai.project import CrewBase, agent, crew, task
+from crewai_tools import TavilySearchTool
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+load_dotenv()
+
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+search_tool = TavilySearchTool()
+
+
+class GroceryItem(BaseModel):
+    name: str = Field(description="Name of the grocery item")
+    quantity: str = Field(description="Quantity needed")
+    estimated_price: str = Field(description="Estimated price")
+    category: str = Field(description="Store section")
+
+
+class MealPlan(BaseModel):
+    meal_name: str = Field(description="Name of the meal")
+    difficulty_level: str = Field(description="'Easy', 'Medium', 'Hard'")
+    servings: int = Field(description="Number of people it serves")
+    researched_ingredients: List[str] = Field(description="Ingredients found through research")
+
+
+class ShoppingCategory(BaseModel):
+    section_name: str = Field(description="Store section")
+    items: List[GroceryItem] = Field(description="Items in this section")
+    estimated_total: str = Field(description="Estimated cost for this section")
+
+
+class GroceryShoppingPlan(BaseModel):
+    total_budget: str = Field(description="Total planned budget")
+    meal_plans: List[MealPlan] = Field(description="Planned meals")
+    shopping_sections: List[ShoppingCategory] = Field(description="Organized by store sections")
+    shopping_tips: List[str] = Field(description="Money-saving and efficiency tips")
+
+
+meal_planner = Agent(
+    role="Meal Planner & Recipe Researcher",
+    goal="Search for optimal recipes and create detailed meal plans",
+    backstory="A skilled meal planner who considers diet, skill level, and budget.",
+    tools=[search_tool],
+    llm=llm,
+    verbose=False,
+)
+
+shopping_organizer = Agent(
+    role="Shopping Organizer",
+    goal="Organize grocery lists by store sections efficiently",
+    backstory="An experienced shopper who creates efficient store-ready lists.",
+    llm=llm,
+    verbose=False,
+)
+
+budget_advisor = Agent(
+    role="Budget Advisor",
+    goal="Provide cost estimates and money-saving tips",
+    backstory="A budget-conscious shopper who helps families save money on groceries.",
+    tools=[search_tool],
+    llm=llm,
+    verbose=False,
+)
+
+summary_agent = Agent(
+    role="Report Compiler",
+    goal="Compile comprehensive meal planning reports from all team outputs",
+    backstory="A coordinator who turns specialist outputs into one clear guide.",
+    llm=llm,
+    verbose=False,
+)
+
+meal_planning_task = Task(
+    description=(
+        "Search for the best '{meal_name}' recipe for {servings} people within a {budget} budget. "
+        "Consider dietary restrictions: {dietary_restrictions} and cooking skill level: {cooking_skill}."
+    ),
+    expected_output="A detailed meal plan with researched ingredients and cooking instructions.",
+    agent=meal_planner,
+    output_pydantic=MealPlan,
+    output_file="meals.json",
+)
+
+shopping_task = Task(
+    description="Organize the ingredients from the '{meal_name}' meal plan into a grocery shopping list.",
+    expected_output="An organized shopping list grouped by store sections with quantities and prices.",
+    agent=shopping_organizer,
+    context=[meal_planning_task],
+    output_pydantic=GroceryShoppingPlan,
+    output_file="shopping_list.json",
+)
+
+budget_task = Task(
+    description="Analyze the shopping plan and provide practical money-saving tips.",
+    expected_output="A shopping guide with prices, budget analysis, and substitutions.",
+    agent=budget_advisor,
+    context=[meal_planning_task, shopping_task],
+    output_file="shopping_guide.md",
+)
+
+
+@CrewBase
+class LeftoversCrew:
+    agents: List[BaseAgent]
+    tasks: List[Task]
+
+    agents_config = "config/agents.yaml"
+    tasks_config = "config/tasks.yaml"
+
+    @agent
+    def leftover_manager(self) -> Agent:
+        return Agent(
+            config=self.agents_config["leftover_manager"],
+            tools=[search_tool],
+            llm=llm,
+            verbose=False,
+        )
+
+    @task
+    def leftover_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["leftover_task"],
+            agent=self.leftover_manager(),
+        )
+
+    @crew
+    def crew(self) -> Crew:
+        return Crew(
+            agents=self.agents,
+            tasks=self.tasks,
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+leftovers_cb = LeftoversCrew()
+yaml_leftover_manager = leftovers_cb.leftover_manager()
+yaml_leftover_task = leftovers_cb.leftover_task()
+yaml_leftover_task.context = [meal_planning_task, shopping_task, budget_task]
+
+summary_task = Task(
+    description="Compile recipe, shopping, budget, and leftover guidance into one meal planning report.",
+    expected_output="A complete, user-friendly meal planning guide.",
+    agent=summary_agent,
+    context=[meal_planning_task, shopping_task, budget_task, yaml_leftover_task],
+)
+
+complete_grocery_crew = Crew(
+    agents=[meal_planner, shopping_organizer, budget_advisor, yaml_leftover_manager, summary_agent],
+    tasks=[meal_planning_task, shopping_task, budget_task, yaml_leftover_task, summary_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+complete_result = complete_grocery_crew.kickoff(
+    inputs={
+        "meal_name": "Chicken Stir Fry",
+        "servings": 4,
+        "budget": "$25",
+        "dietary_restrictions": ["no nuts", "low sodium"],
+        "cooking_skill": "beginner",
+    }
+)
+
+
+# Completed exercise 1: nutrition analyst.
+nutrition_analyst = Agent(
+    role="Nutrition Analyst & Health Advisor",
+    goal="Analyze meal nutritional content and provide healthy recommendations",
+    backstory="A nutrition advisor who estimates calories, macros, and healthier substitutions.",
+    tools=[search_tool],
+    llm=llm,
+    verbose=False,
+)
+
+nutrition_task = Task(
+    description="Analyze nutrition for '{meal_name}' and suggest improvements within {budget}.",
+    expected_output="Calorie, macronutrient, and healthier alternative guidance.",
+    agent=nutrition_analyst,
+    context=[meal_planning_task, shopping_task, budget_task],
+    output_file="nutrition_analysis.md",
+)
+
+
+# Completed exercise 2: weekly planning schemas.
+class MealType(str, Enum):
+    BREAKFAST = "breakfast"
+    LUNCH = "lunch"
+    DINNER = "dinner"
+    SNACK = "snack"
+
+
+class DailyMeals(BaseModel):
+    date: str = Field(description="Date in YYYY-MM-DD format")
+    breakfast: Optional[MealPlan] = None
+    lunch: Optional[MealPlan] = None
+    dinner: Optional[MealPlan] = None
+    snacks: Optional[List[MealPlan]] = None
+
+
+class WeeklyMealPlan(BaseModel):
+    week_start_date: str = Field(description="Start date of the week")
+    daily_meals: List[DailyMeals] = Field(description="Meals for each day")
+    weekly_themes: List[str] = Field(description="Cooking themes for the week")
+    prep_suggestions: List[str] = Field(description="Meal prep recommendations")
+
+
+class WeeklyGroceryPlan(BaseModel):
+    weekly_budget: str = Field(description="Total weekly budget")
+    meal_plans: List[DailyMeals] = Field(description="All weekly meals")
+    shopping_sections: List[ShoppingCategory] = Field(description="Organized by store sections")
+    bulk_items: List[GroceryItem] = Field(description="Items to buy in bulk")
+    shopping_tips: List[str] = Field(description="Weekly shopping efficiency tips")
+    budget_breakdown: Dict[str, str] = Field(description="Daily budget allocation")
+```
+
+YAML used by the `@CrewBase` example:
+
+```yaml
+# config/agents.yaml
+leftover_manager:
+  role: Food Waste Reduction Specialist
+  goal: Identify likely leftovers and suggest practical ways to reuse ingredients from the meal and shopping plan.
+  backstory: >
+    You are a practical home cooking advisor who helps families reduce food waste,
+    stretch grocery budgets, and turn leftover ingredients into simple follow-up meals.
+  verbose: false
+```
+
+```yaml
+# config/tasks.yaml
+leftover_task:
+  description: >
+    Review the meal plan, shopping list, and budget guidance for '{meal_name}' serving {servings} people.
+    Suggest how to store likely leftovers safely, what ingredients can be reused, and 2-3 simple follow-up meal ideas.
+    Consider dietary restrictions: {dietary_restrictions} and cooking skill level: {cooking_skill}.
+  expected_output: >
+    A practical leftover management plan with storage tips, reuse ideas, and simple follow-up meals.
+  agent: leftover_manager
+```
+
 
 
 
