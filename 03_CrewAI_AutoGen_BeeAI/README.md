@@ -43,7 +43,9 @@ Table of Contents:
       - [Summary: Structured Outputs in CrewAI](#summary-structured-outputs-in-crewai)
     - [Functions and CrewAI](#functions-and-crewai)
       - [Extending CrewAI with Custom Functions](#extending-crewai-with-custom-functions)
+      - [Exercise: Custom Tools in CrewAI - Agents with Tools vs. Tasks with Tools](#exercise-custom-tools-in-crewai---agents-with-tools-vs-tasks-with-tools)
     - [Summary and Evaluation](#summary-and-evaluation)
+      - [Exercise: Building your own AI Nutrition Coach using a Multi-Agent System and Multimodal AI](#exercise-building-your-own-ai-nutrition-coach-using-a-multi-agent-system-and-multimodal-ai)
     - [Extra: Combining CrewAI with LangGraph](#extra-combining-crewai-with-langgraph)
   - [3. Alternative Agentic Frameworks: BeeAI and AutoGen (AG2)](#3-alternative-agentic-frameworks-beeai-and-autogen-ag2)
     - [BeeAI Core Concepts and Architecture](#beeai-core-concepts-and-architecture)
@@ -3170,9 +3172,428 @@ blog_task:
 
 #### Extending CrewAI with Custom Functions
 
+* Custom functions let you expose ordinary Python logic as CrewAI tools.
+* Use `@tool` from `crewai.tools` for simple function-based tools.
+* Tools can be attached to an `Agent` when the agent should decide which capability to use.
+* Tools can be attached to a `Task` when the workflow should control exactly where a capability is available.
+* Agent-centric tool assignment gives the agent more autonomy.
+* Task-centric tool assignment gives the workflow more structure and traceability.
+* Use OpenAI models through CrewAI's `LLM` class and load credentials with `python-dotenv`.
+* Use Tavily for web search when an agent needs current external information.
 
+```python
+import re
+
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai.tools import tool
+from crewai_tools import PDFSearchTool, TavilySearchTool
+from dotenv import load_dotenv
+
+# Load OPENAI_API_KEY and TAVILY_API_KEY from .env.
+# Keep secrets outside the notebook/README code.
+load_dotenv()
+
+# Current CrewAI style: use CrewAI's LLM wrapper and the provider/model string.
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+
+
+# ============================================================
+# 1. Custom function tools
+# ============================================================
+# @tool turns a normal Python function into a CrewAI tool.
+# The tool name and docstring matter: the agent uses them to decide
+# when the function is relevant and how to call it.
+
+@tool("Add Numbers")
+def add_numbers(text: str) -> str:
+    """Extract all integers from text and return their sum."""
+    numbers = [int(n) for n in re.findall(r"-?\d+", text)]
+    return f"Numbers: {numbers}. Sum: {sum(numbers)}."
+
+
+@tool("Multiply Numbers")
+def multiply_numbers(text: str) -> str:
+    """Extract all integers from text and return their product."""
+    numbers = [int(n) for n in re.findall(r"-?\d+", text)]
+
+    product = 1
+    for number in numbers:
+        product *= number
+
+    return f"Numbers: {numbers}. Product: {product}."
+
+
+# ============================================================
+# 2. Agent-centric custom tools
+# ============================================================
+# Agent-centric means the tools are attached to the agent.
+# Use this when the agent should choose the right capability from
+# the user's request. Here it decides between addition and multiplication.
+
+calculator_agent = Agent(
+    role="Calculator",
+    goal="Extract, add, or multiply numbers from user instructions.",
+    backstory=(
+        "You are a precise calculator assistant. You read natural language, "
+        "identify the numbers, and choose the correct calculator tool."
+    ),
+    llm=llm,
+    tools=[add_numbers, multiply_numbers],
+    verbose=True,
+)
+
+calculator_task = Task(
+    description=(
+        "Read the following instruction and compute the correct result:\n\n"
+        "{calculation_request}\n\n"
+        "Decide whether the user wants addition or multiplication, then use the correct tool."
+    ),
+    expected_output="A clear answer showing the extracted numbers and final result.",
+    agent=calculator_agent,
+)
+
+calculator_crew = Crew(
+    agents=[calculator_agent],
+    tasks=[calculator_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+calculator_result = calculator_crew.kickoff(
+    inputs={"calculation_request": "Add 7 and 8, also 9, don't forget 10."}
+)
+
+print(calculator_result.raw)
+
+
+# ============================================================
+# 3. Agent-centric built-in tools
+# ============================================================
+# This customer-service agent gets both a PDF tool and Tavily search.
+# The agent decides which source to use:
+# - PDFSearchTool for official local FAQ information.
+# - TavilySearchTool for current web information when the FAQ is not enough.
+#
+# PDFSearchTool expects the referenced PDF to exist locally.
+# TavilySearchTool reads TAVILY_API_KEY from the environment.
+
+pdf_search_tool = PDFSearchTool(pdf="DailyDishFAQ.pdf")
+web_search_tool = TavilySearchTool()
+
+inquiry_specialist = Agent(
+    role="Inquiry Specialist",
+    goal="Answer Daily Dish customer questions using the most accurate available source.",
+    backstory=(
+        "You are a helpful customer inquiry specialist. Use the official FAQ PDF "
+        "for program details, and use web search only when current information is needed."
+    ),
+    llm=llm,
+    tools=[pdf_search_tool, web_search_tool],
+    verbose=True,
+)
+
+agent_centric_task = Task(
+    description=(
+        "Answer this customer question:\n\n"
+        "{customer_question}\n\n"
+        "Prefer the FAQ PDF for official details. Use Tavily only if the FAQ does not contain enough information."
+    ),
+    expected_output="A professional customer-service answer that directly responds to the question.",
+    agent=inquiry_specialist,
+)
+
+agent_centric_crew = Crew(
+    agents=[inquiry_specialist],
+    tasks=[agent_centric_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+agent_centric_result = agent_centric_crew.kickoff(
+    inputs={"customer_question": "What are your phone number, hours, and parking options?"}
+)
+
+print(agent_centric_result.raw)
+
+
+# ============================================================
+# 4. Task-centric tool assignment
+# ============================================================
+# Task-centric means tools are attached to specific tasks, not the agent.
+# Use this when you want a fixed, auditable workflow.
+# In this example:
+# 1. The first task is allowed to search the FAQ PDF.
+# 2. The second task drafts the answer using the first task's result as context.
+
+customer_service_specialist = Agent(
+    role="Customer Service Specialist",
+    goal="Provide clear customer support through a guided process.",
+    backstory=(
+        "You are a customer service specialist. Follow the task sequence and "
+        "use only the tools attached to each task."
+    ),
+    llm=llm,
+    verbose=True,
+)
+
+faq_search_task = Task(
+    description=(
+        "Search the Daily Dish FAQ PDF for information relevant to this customer question:\n\n"
+        "{customer_question}\n\n"
+        "Extract the most relevant official facts."
+    ),
+    expected_output="Relevant FAQ facts that answer the customer's question.",
+    agent=customer_service_specialist,
+    tools=[pdf_search_tool],
+)
+
+response_drafting_task = Task(
+    description=(
+        "Using the FAQ facts from the previous task, write a friendly and professional response."
+    ),
+    expected_output="A clear, friendly customer-service response.",
+    agent=customer_service_specialist,
+    context=[faq_search_task],
+)
+
+task_centric_crew = Crew(
+    agents=[customer_service_specialist],
+    tasks=[faq_search_task, response_drafting_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+task_centric_result = task_centric_crew.kickoff(
+    inputs={"customer_question": "What are your phone number, hours, and parking options?"}
+)
+
+print(task_centric_result.raw)
+
+
+# ============================================================
+# 5. Optional chatbot loop
+# ============================================================
+# Choose the agent-centric crew when the assistant should decide which tools to use.
+# Choose the task-centric crew when every step should be explicit.
+
+def run_chatbot(crew: Crew) -> None:
+    """Run a simple terminal chatbot loop. Type 'exit' or 'quit' to stop."""
+    while True:
+        question = input("\nCustomer question: ")
+
+        if question.lower() in {"exit", "quit"}:
+            break
+
+        result = crew.kickoff(inputs={"customer_question": question})
+        print("\nAssistant answer:")
+        print(result.raw)
+
+
+# run_chatbot(agent_centric_crew)
+# run_chatbot(task_centric_crew)
+```
+
+#### Exercise: Custom Tools in CrewAI - Agents with Tools vs. Tasks with Tools
+
+Notebook: [`lab/05_Agent-Tool_vs_Task-Tool.ipynb`](./lab/05_Agent-Tool_vs_Task-Tool.ipynb).
+
+* The notebook compares two ways to use tools in CrewAI:
+  * agent-centric tools, where tools are attached to the agent
+  * task-centric tools, where tools are attached to individual tasks
+* It uses OpenAI through CrewAI's current `LLM` interface.
+* It loads `OPENAI_API_KEY` and `TAVILY_API_KEY` from `.env` with `python-dotenv`.
+* It uses `PDFSearchTool` to search The Daily Dish FAQ PDF.
+* It uses `TavilySearchTool` for current web search.
+* It demonstrates an agent-centric customer support crew where the agent chooses between PDF search and Tavily search.
+* It demonstrates a task-centric customer support crew where:
+  * one task can use the FAQ PDF tool
+  * one task can use Tavily search
+  * one task drafts the final answer from prior task context
+* It also shows how to create custom CrewAI tools with `@tool` from `crewai.tools`.
+* There were no unfinished exercise cells; the custom calculator section is updated and runnable with OpenAI models.
+
+Summary code:
+
+```python
+import os
+import re
+from functools import reduce
+
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai.tools import tool
+from crewai_tools import PDFSearchTool, TavilySearchTool
+from dotenv import load_dotenv
+
+load_dotenv()
+
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+
+#FAQ_PDF_URL = "https://cf-courses-data.s3.us.cloud-object-storage.appdomain.cloud/7vgNfis17dQfjHAiIKkBOg/The-Daily-Dish-FAQ.pdf"
+FAQ_PDF_URL = "./data/The_Daily_Dish_FAQ.pdf"
+
+pdf_search_tool = PDFSearchTool(pdf=FAQ_PDF_URL)
+web_search_tool = TavilySearchTool()
+
+
+# Agent-centric tools: the agent receives all tools and chooses which to use.
+agent_centric_agent = Agent(
+    role="The Daily Dish Inquiry Specialist",
+    goal=(
+        "Accurately answer customer questions about The Daily Dish restaurant. "
+        "Decide whether to use the restaurant FAQ PDF or Tavily web search."
+    ),
+    backstory=(
+        "You are an AI assistant for The Daily Dish. You can search the official FAQ PDF "
+        "for restaurant details and use Tavily web search when current external information is needed."
+    ),
+    tools=[pdf_search_tool, web_search_tool],
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+agent_centric_task = Task(
+    description=(
+        "Answer the following customer query: '{customer_query}'. "
+        "Use either PDF search or Tavily web search to find the most relevant information."
+    ),
+    expected_output="A comprehensive and well-formatted answer to the customer's query.",
+    agent=agent_centric_agent,
+)
+
+agent_centric_crew = Crew(
+    agents=[agent_centric_agent],
+    tasks=[agent_centric_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+agent_centric_result = agent_centric_crew.kickoff(
+    inputs={"customer_query": "What are your phone number, hours, and parking options?"}
+)
+
+
+# Task-centric tools: each task controls which tool is available.
+task_centric_agent = Agent(
+    role="Customer Service Specialist",
+    goal="Provide customer support by following a structured tool-use workflow.",
+    backstory=(
+        "You are an AI assistant for The Daily Dish. Use only the tool assigned to each task "
+        "and pass useful findings to the next step."
+    ),
+    tools=[],
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+faq_search_task = Task(
+    description=(
+        "Search the restaurant FAQ PDF for information related to this customer query: "
+        "'{customer_query}'."
+    ),
+    expected_output="Relevant FAQ information, or a clear note that the FAQ did not contain the answer.",
+    tools=[pdf_search_tool],
+    agent=task_centric_agent,
+)
+
+web_context_task = Task(
+    description=(
+        "Search the web with Tavily for current public information related to this customer query: "
+        "'{customer_query}'."
+    ),
+    expected_output="Relevant web search findings, or a clear note if web search was not needed.",
+    tools=[web_search_tool],
+    agent=task_centric_agent,
+)
+
+response_drafting_task = Task(
+    description=(
+        "Using the FAQ findings and Tavily findings from the previous tasks, draft a friendly "
+        "customer-facing response to: '{customer_query}'."
+    ),
+    expected_output="The final customer-facing response.",
+    agent=task_centric_agent,
+    context=[faq_search_task, web_context_task],
+)
+
+task_centric_crew = Crew(
+    agents=[task_centric_agent],
+    tasks=[faq_search_task, web_context_task, response_drafting_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+task_centric_result = task_centric_crew.kickoff(
+    inputs={"customer_query": "What are your phone number, hours, and parking options?"}
+)
+
+
+# Custom function tools with @tool.
+@tool("Add Two Numbers Tool")
+def add_numbers(data: str) -> int:
+    """Extract integers from text and return their sum."""
+    numbers = list(map(int, re.findall(r"-?\d+", data)))
+    return sum(numbers)
+
+
+@tool("Multiply Numbers Tool")
+def multiply_numbers(data: str) -> int:
+    """Extract integers from text and return their product."""
+    numbers = list(map(int, re.findall(r"-?\d+", data)))
+    return reduce(lambda x, y: x * y, numbers, 1)
+
+
+calculator_agent = Agent(
+    role="Calculator",
+    goal="Extracts, adds, or multiplies numbers when asked.",
+    backstory="An expert at parsing numeric instructions and computing sums or products.",
+    tools=[add_numbers, multiply_numbers],
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+calculation_task = Task(
+    description=(
+        "Extract numbers from '{numbers}' and either add or multiply them, "
+        "depending on the natural-language instruction."
+    ),
+    expected_output="An integer result, either sum or product, based on the user's request.",
+    agent=calculator_agent,
+)
+
+calculator_crew = Crew(
+    agents=[calculator_agent],
+    tasks=[calculation_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+sum_result = calculator_crew.kickoff(
+    inputs={"numbers": "please add 4, 5, and 6"}
+)
+
+product_result = calculator_crew.kickoff(
+    inputs={"numbers": "multiply 7 and 8 also 9 dont forget 10"}
+)
+```
 
 ### Summary and Evaluation
+
+#### Exercise: Building your own AI Nutrition Coach using a Multi-Agent System and Multimodal AI
+
+Folder: [`lab/06_nourish_bot/README.md`](./lab/06_nourish_bot/README.md).
+
+Original repository: [Smart-Nutritional-App](https://github.com/HaileyTQuach/Smart-Nutritional-App), included here as the [`lab/06_nourish_bot/NourishBot`](./lab/06_nourish_bot/NourishBot) Git submodule.
+
+NourishBot is .... The exercise in [`Instructions.pdf`](./lab/06_nourish_bot/Instructions.pdf) focuses on ...
+
+```bash
+git clone --no-checkout https://github.com/HaileyTQuach/Smart-Nutritional-App.git NourishBot
+cd NourishBot
+git checkout 5-final
+```
 
 ### Extra: Combining CrewAI with LangGraph
 
