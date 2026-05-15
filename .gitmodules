@@ -1,3 +1,7 @@
 [submodule "02_Langchain_Langgraph/lab/05_docchat/docchat"]
 	path = 02_Langchain_Langgraph/lab/05_docchat/docchat
 	url = https://github.com/ibm-developer-skills-network/zzpwx-docchat.git
+[submodule "03_CrewAI_AutoGen_BeeAI/lab/06_nourish_bot/NourishBot"]
+	path = 03_CrewAI_AutoGen_BeeAI/lab/06_nourish_bot/NourishBot
+	url = https://github.com/HaileyTQuach/Smart-Nutritional-App.git
+	branch = 5-final

@@ -3587,12 +3587,226 @@ Folder: [`lab/06_nourish_bot/README.md`](./lab/06_nourish_bot/README.md).
 
 Original repository: [Smart-Nutritional-App](https://github.com/HaileyTQuach/Smart-Nutritional-App), included here as the [`lab/06_nourish_bot/NourishBot`](./lab/06_nourish_bot/NourishBot) Git submodule.
 
-NourishBot is .... The exercise in [`Instructions.pdf`](./lab/06_nourish_bot/Instructions.pdf) focuses on ...
+NourishBot is a Gradio-based AI nutrition coach built with CrewAI. It accepts a food image, optional dietary restrictions, and a workflow choice. The recipe workflow detects ingredients, filters them against dietary needs, and suggests recipes. The analysis workflow estimates calories, produces a nutrient breakdown, evaluates meal healthiness, and includes a nutrition disclaimer.
+
+The original repository is kept unchanged as a submodule. The completed exercise is a standalone notebook that recreates the core agentic workflows without Gradio, using current CrewAI style, OpenAI models, `python-dotenv`, Tavily search for recipe context, custom `@tool` functions, and Pydantic structured outputs.
+
+Notebook: [`lab/06_nourish_bot/06_nourish_bot.ipynb`](./lab/06_nourish_bot/06_nourish_bot.ipynb).
+
+What the notebook code does:
+
+* Loads `.env` and initializes the OpenAI-backed CrewAI `LLM`, direct `OpenAI()` client, and Tavily search tool.
+* Defines Pydantic output models for recipe suggestions and nutrition analysis.
+* Converts local food images into base64 data URLs for multimodal OpenAI calls.
+* Wraps image and ingredient functions as CrewAI tools with `@tool`.
+* Creates specialized agents for ingredient detection, nutrition analysis, and recipe suggestion.
+* Builds a `recipe_crew` that detects ingredients first, then passes that task output into recipe generation with `context=[...]`.
+* Builds an `analysis_crew` that analyzes a meal image and returns structured nutrition output.
+* Leaves the final `kickoff(...)` calls commented so the notebook can be read safely without triggering API calls.
 
 ```bash
-git clone --no-checkout https://github.com/HaileyTQuach/Smart-Nutritional-App.git NourishBot
-cd NourishBot
-git checkout 5-final
+git submodule update --init --recursive 03_CrewAI_AutoGen_BeeAI/lab/06_nourish_bot/NourishBot
+```
+
+Summary code from the notebook:
+
+```python
+import base64
+import os
+from pathlib import Path
+from typing import List, Optional
+
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai.tools import tool
+from crewai_tools import TavilySearchTool
+from dotenv import load_dotenv
+from openai import OpenAI
+from pydantic import BaseModel, Field
+
+load_dotenv()
+
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+openai_client = OpenAI()
+tavily_search_tool = TavilySearchTool()
+
+
+class Recipe(BaseModel):
+    title: str = Field(description="Recipe title")
+    ingredients: List[str] = Field(description="Ingredients required for the recipe")
+    instructions: str = Field(description="Step-by-step cooking instructions")
+    calorie_estimate: int = Field(description="Estimated calories per serving")
+
+
+class RecipeSuggestionOutput(BaseModel):
+    recipes: List[Recipe] = Field(description="Suggested recipes")
+
+
+class VitaminInfo(BaseModel):
+    name: str = Field(description="Vitamin name")
+    percentage_dv: str = Field(description="Estimated percent daily value")
+
+
+class MineralInfo(BaseModel):
+    name: str = Field(description="Mineral name")
+    amount: str = Field(description="Estimated amount and unit")
+
+
+class NutrientBreakdown(BaseModel):
+    protein: Optional[str] = None
+    carbohydrates: Optional[str] = None
+    fats: Optional[str] = None
+    vitamins: List[VitaminInfo] = Field(default_factory=list)
+    minerals: List[MineralInfo] = Field(default_factory=list)
+
+
+class NutrientAnalysisOutput(BaseModel):
+    dish: Optional[str] = None
+    portion_size: Optional[str] = None
+    estimated_calories: Optional[int] = None
+    nutrients: NutrientBreakdown = Field(default_factory=NutrientBreakdown)
+    health_evaluation: Optional[str] = None
+
+
+def image_to_data_url(image_path: str) -> str:
+    path = Path(image_path)
+    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+    suffix = path.suffix.lower().lstrip(".") or "jpeg"
+    mime = "jpeg" if suffix in {"jpg", "jpeg"} else suffix
+    return f"data:image/{mime};base64,{encoded}"
+
+
+def ask_openai_vision(prompt: str, image_path: str, max_tokens: int = 700) -> str:
+    response = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_to_data_url(image_path)}},
+                ],
+            }
+        ],
+        temperature=0.2,
+        max_tokens=max_tokens,
+    )
+    return response.choices[0].message.content or ""
+
+
+@tool("Extract ingredients from food image")
+def extract_ingredients(image_path: str) -> str:
+    """Identify visible food ingredients in an image and return a comma-separated list."""
+    return ask_openai_vision(
+        "Identify the visible food ingredients. Return only a comma-separated ingredient list.",
+        image_path,
+        max_tokens=300,
+    )
+
+
+@tool("Clean ingredient list")
+def clean_ingredients(raw_ingredients: str) -> List[str]:
+    """Clean a comma-separated ingredient string into a normalized list."""
+    return [
+        item.strip().lower()
+        for item in raw_ingredients.replace("\n", ",").split(",")
+        if item.strip()
+    ]
+
+
+@tool("Analyze food image nutrition")
+def analyze_food_image(image_path: str) -> str:
+    """Analyze a food image and return calories, nutrients, and health guidance."""
+    return ask_openai_vision(
+        (
+            "Analyze this meal image. Identify the dish, estimate portion size and calories, "
+            "summarize protein, carbohydrates, fats, vitamins, and minerals, then provide a brief health evaluation. "
+            "Include a reminder that estimates are approximate and not medical advice."
+        ),
+        image_path,
+        max_tokens=900,
+    )
+
+
+ingredient_agent = Agent(
+    role="Vision Ingredient Specialist",
+    goal="Detect food ingredients from uploaded meal or fridge images.",
+    backstory="You specialize in interpreting food images and extracting practical ingredient lists.",
+    tools=[extract_ingredients, clean_ingredients],
+    llm=llm,
+    allow_delegation=False,
+    verbose=True,
+)
+
+nutrition_agent = Agent(
+    role="Nutrition Analysis Specialist",
+    goal="Assess ingredients and meals for dietary fit, calories, nutrients, and health balance.",
+    backstory="You are a careful nutrition assistant who gives useful, non-medical dietary guidance.",
+    tools=[analyze_food_image],
+    llm=llm,
+    allow_delegation=False,
+    verbose=True,
+)
+
+recipe_agent = Agent(
+    role="Recipe Suggestion Specialist",
+    goal="Create practical recipes from detected ingredients and dietary restrictions.",
+    backstory="You are a creative recipe coach who can use current recipe context when helpful.",
+    tools=[tavily_search_tool],
+    llm=llm,
+    allow_delegation=False,
+    verbose=True,
+)
+
+ingredient_detection_task = Task(
+    description=(
+        "Detect ingredients from this image path: {image_path}. "
+        "Return a concise list of visible food ingredients."
+    ),
+    expected_output="A cleaned list of detected ingredients.",
+    agent=ingredient_agent,
+)
+
+recipe_suggestion_task = Task(
+    description=(
+        "Using the detected ingredients and dietary restriction '{dietary_restrictions}', "
+        "suggest 2-3 realistic recipes. Use Tavily search if useful for current recipe context."
+    ),
+    expected_output="Structured recipe suggestions with ingredients, instructions, and calorie estimates.",
+    agent=recipe_agent,
+    context=[ingredient_detection_task],
+    output_pydantic=RecipeSuggestionOutput,
+)
+
+recipe_crew = Crew(
+    agents=[ingredient_agent, recipe_agent],
+    tasks=[ingredient_detection_task, recipe_suggestion_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+nutrition_analysis_task = Task(
+    description=(
+        "Analyze this food image path: {image_path}. Estimate calories, portion size, nutrients, "
+        "and provide a short health evaluation."
+    ),
+    expected_output="A structured nutrition analysis for the food image.",
+    agent=nutrition_agent,
+    output_pydantic=NutrientAnalysisOutput,
+)
+
+analysis_crew = Crew(
+    agents=[nutrition_agent],
+    tasks=[nutrition_analysis_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+# Optional execution:
+# image_path = "NourishBot/examples/food-1.jpg"
+# recipe_result = recipe_crew.kickoff(
+#     inputs={"image_path": image_path, "dietary_restrictions": "vegan"}
+# )
+# analysis_result = analysis_crew.kickoff(inputs={"image_path": image_path})
 ```
 
 ### Extra: Combining CrewAI with LangGraph
