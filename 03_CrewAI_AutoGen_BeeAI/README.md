@@ -4078,6 +4078,286 @@ class ResearchCrew:
 
 ### Extra: Combining CrewAI with LangGraph
 
+CrewAI and LangGraph solve different parts of the agentic design problem, so they can be combined cleanly instead of treated as competing choices.
+
+* Use **LangGraph** when you need explicit state, routing, retries, loops, checkpoints, human approval, or predictable workflow control.
+* Use **CrewAI** when you want a readable role/task/process model for a collaborative group of agents.
+* A common pattern is to let LangGraph own the outer workflow and call a CrewAI crew inside one node.
+* Another useful pattern is to let LangGraph route requests to different crews, such as a research crew, support crew, or planning crew.
+* The reverse direction also works: a CrewAI tool can call a compiled LangGraph workflow when an agent needs a deterministic subroutine.
+* Keep the boundary explicit: pass plain dictionaries into LangGraph nodes and plain strings or structured outputs out of CrewAI tasks.
+
+#### Pattern 1: Call a CrewAI Crew from a LangGraph Node
+
+In this pattern, LangGraph handles the durable workflow state and CrewAI handles the collaborative multi-agent work inside one step.
+
+```python
+from typing_extensions import TypedDict
+
+from crewai import Agent, Crew, LLM, Process, Task
+from dotenv import load_dotenv
+from langgraph.graph import END, START, StateGraph
+
+load_dotenv()
+
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+
+researcher = Agent(
+    role="Research Analyst",
+    goal="Find practical, accurate information about {topic}",
+    backstory="You turn broad topics into clear, evidence-aware research notes.",
+    llm=llm,
+    verbose=True,
+)
+
+writer = Agent(
+    role="Technical Writer",
+    goal="Convert research notes into a concise learner-friendly explanation",
+    backstory="You write direct, structured explanations for technical learners.",
+    llm=llm,
+    verbose=True,
+)
+
+research_task = Task(
+    description="Research the topic: {topic}. Focus on the most useful points for a short lesson.",
+    expected_output="A concise research brief with the key facts and trade-offs.",
+    agent=researcher,
+)
+
+write_task = Task(
+    description="Use the research brief to write a short explanation about {topic}.",
+    expected_output="A clear explanation in 4-6 bullet points.",
+    agent=writer,
+    context=[research_task],
+)
+
+content_crew = Crew(
+    agents=[researcher, writer],
+    tasks=[research_task, write_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+
+class ContentState(TypedDict, total=False):
+    topic: str
+    draft: str
+
+
+def run_crewai_content_crew(state: ContentState) -> dict:
+    """LangGraph node: run the CrewAI crew and write its result back to graph state."""
+    result = content_crew.kickoff(inputs={"topic": state["topic"]})
+    return {"draft": result.raw}
+
+
+builder = StateGraph(ContentState)
+builder.add_node("run_crewai_content_crew", run_crewai_content_crew)
+builder.add_edge(START, "run_crewai_content_crew")
+builder.add_edge("run_crewai_content_crew", END)
+
+graph = builder.compile()
+
+result = graph.invoke({"topic": "AI nutrition coaching"})
+print(result["draft"])
+```
+
+#### Pattern 2: Use LangGraph to Route Between Crews
+
+Here, LangGraph decides which CrewAI crew should handle the request. The crews stay focused on their roles, while the graph owns the branching logic.
+
+```python
+from typing_extensions import TypedDict
+
+from crewai import Agent, Crew, LLM, Process, Task
+from dotenv import load_dotenv
+from langgraph.graph import END, START, StateGraph
+
+load_dotenv()
+
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+
+research_agent = Agent(
+    role="Research Specialist",
+    goal="Answer exploratory questions with concise research findings",
+    backstory="You are careful, specific, and good at synthesizing open-ended questions.",
+    llm=llm,
+)
+
+support_agent = Agent(
+    role="Support Specialist",
+    goal="Answer operational or support-style questions clearly",
+    backstory="You help users resolve practical questions with direct next steps.",
+    llm=llm,
+)
+
+research_task = Task(
+    description="Answer this research request: {request}",
+    expected_output="A concise research answer with the most relevant points.",
+    agent=research_agent,
+)
+
+support_task = Task(
+    description="Answer this support request: {request}",
+    expected_output="A practical support response with next steps.",
+    agent=support_agent,
+)
+
+research_crew = Crew(
+    agents=[research_agent],
+    tasks=[research_task],
+    process=Process.sequential,
+)
+
+support_crew = Crew(
+    agents=[support_agent],
+    tasks=[support_task],
+    process=Process.sequential,
+)
+
+
+class RouterState(TypedDict, total=False):
+    request: str
+    route: str
+    answer: str
+
+
+def route_request(state: RouterState) -> dict:
+    """A graph node can use simple logic, an LLM classifier, or structured routing."""
+    text = state["request"].lower()
+    route = "support" if any(word in text for word in ["refund", "error", "account"]) else "research"
+    return {"route": route}
+
+
+def choose_crew(state: RouterState) -> str:
+    return state["route"]
+
+
+def run_research_crew(state: RouterState) -> dict:
+    result = research_crew.kickoff(inputs={"request": state["request"]})
+    return {"answer": result.raw}
+
+
+def run_support_crew(state: RouterState) -> dict:
+    result = support_crew.kickoff(inputs={"request": state["request"]})
+    return {"answer": result.raw}
+
+
+builder = StateGraph(RouterState)
+builder.add_node("route_request", route_request)
+builder.add_node("research", run_research_crew)
+builder.add_node("support", run_support_crew)
+
+builder.add_edge(START, "route_request")
+builder.add_conditional_edges(
+    "route_request",
+    choose_crew,
+    {
+        "research": "research",
+        "support": "support",
+    },
+)
+builder.add_edge("research", END)
+builder.add_edge("support", END)
+
+graph = builder.compile()
+
+result = graph.invoke({"request": "What are the benefits of meal planning with AI?"})
+print(result["route"])
+print(result["answer"])
+```
+
+#### Pattern 3: Call a LangGraph Workflow from a CrewAI Tool
+
+In this pattern, CrewAI gives the agent a tool. The tool wraps a compiled LangGraph workflow, which is useful when part of the agent's work should follow fixed state-machine logic.
+
+```python
+from typing_extensions import TypedDict
+
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai.tools import tool
+from dotenv import load_dotenv
+from langgraph.graph import END, START, StateGraph
+
+load_dotenv()
+
+
+class ScoreState(TypedDict):
+    text: str
+    score: int
+    label: str
+
+
+def score_text(state: ScoreState) -> dict:
+    """A deterministic LangGraph step that scores the amount of detail in an answer."""
+    score = min(10, max(1, len(state["text"]) // 80))
+    return {"score": score}
+
+
+def label_score(state: ScoreState) -> dict:
+    label = "detailed" if state["score"] >= 5 else "brief"
+    return {"label": label}
+
+
+score_builder = StateGraph(ScoreState)
+score_builder.add_node("score_text", score_text)
+score_builder.add_node("label_score", label_score)
+score_builder.add_edge(START, "score_text")
+score_builder.add_edge("score_text", "label_score")
+score_builder.add_edge("label_score", END)
+
+score_graph = score_builder.compile()
+
+
+@tool("Assess answer detail")
+def assess_answer_detail(answer: str) -> str:
+    """CrewAI tool: call the LangGraph workflow and return a compact tool result."""
+    result = score_graph.invoke({"text": answer, "score": 0, "label": ""})
+    return f"Detail score: {result['score']}/10; label: {result['label']}"
+
+
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+
+reviewer = Agent(
+    role="Answer Reviewer",
+    goal="Review answers and identify whether they need more detail",
+    backstory="You use tools to make review decisions more consistent.",
+    llm=llm,
+    tools=[assess_answer_detail],
+)
+
+review_task = Task(
+    description=(
+        "Review this answer and decide whether it needs more detail:\n\n"
+        "{answer}\n\n"
+        "Use the detail assessment tool before writing your final recommendation."
+    ),
+    expected_output="A short recommendation explaining whether the answer is detailed enough.",
+    agent=reviewer,
+)
+
+review_crew = Crew(
+    agents=[reviewer],
+    tasks=[review_task],
+    process=Process.sequential,
+)
+
+result = review_crew.kickoff(
+    inputs={
+        "answer": "Meal planning with AI can help generate recipes, organize grocery lists, and reduce decision fatigue."
+    }
+)
+print(result.raw)
+```
+
+#### Practical Guidance
+
+* Prefer **LangGraph outside, CrewAI inside** when your application needs robust state transitions, checkpointing, routing, approvals, or retries.
+* Prefer **CrewAI outside, LangGraph inside a tool** when the user-facing experience is a crew but one capability needs deterministic workflow logic.
+* Use `Crew.kickoff(inputs={...})` at the boundary and store the returned `result.raw` or structured task output in graph state.
+* Keep CrewAI agents focused on role-based collaboration; keep LangGraph nodes focused on state changes.
+* If the workflow becomes mostly edges, retries, and conditional loops, make LangGraph the top-level orchestrator.
+* If the workflow is mostly people-like roles and sequential tasks, a CrewAI crew may be enough without LangGraph.
+
 ## 3. Alternative Agentic Frameworks: BeeAI and AutoGen (AG2)
 
 ### BeeAI Core Concepts and Architecture
