@@ -46,6 +46,7 @@ Table of Contents:
       - [Exercise: Custom Tools in CrewAI - Agents with Tools vs. Tasks with Tools](#exercise-custom-tools-in-crewai---agents-with-tools-vs-tasks-with-tools)
     - [Summary and Evaluation](#summary-and-evaluation)
       - [Exercise: Building your own AI Nutrition Coach using a Multi-Agent System and Multimodal AI](#exercise-building-your-own-ai-nutrition-coach-using-a-multi-agent-system-and-multimodal-ai)
+      - [Summary and Cheat Sheet: Custom Tools in CrewAI](#summary-and-cheat-sheet-custom-tools-in-crewai)
     - [Extra: Combining CrewAI with LangGraph](#extra-combining-crewai-with-langgraph)
   - [3. Alternative Agentic Frameworks: BeeAI and AutoGen (AG2)](#3-alternative-agentic-frameworks-beeai-and-autogen-ag2)
     - [BeeAI Core Concepts and Architecture](#beeai-core-concepts-and-architecture)
@@ -3808,6 +3809,272 @@ analysis_crew = Crew(
 # )
 # analysis_result = analysis_crew.kickoff(inputs={"image_path": image_path})
 ```
+
+#### Summary and Cheat Sheet: Custom Tools in CrewAI
+
+##### 1. What is CrewAI?
+
+* CrewAI is a framework for building teams of AI agents that collaborate on multi-step work.
+* A CrewAI workflow is usually made from agents, tasks, tools, and a crew process.
+* Agents define who is doing the work: role, goal, backstory, model, and available tools.
+* Tasks define what work should be done, which agent owns it, which tools are available, and what output is expected.
+* Crews coordinate agents and tasks with a process such as `Process.sequential`.
+
+##### 2. Current Setup Pattern
+
+* Load secrets with `python-dotenv` instead of hard-coding keys.
+* Use CrewAI's `LLM` wrapper with provider-prefixed OpenAI model names.
+* Use `TavilySearchTool` for web search examples.
+* Use `@tool` from `crewai.tools` for simple custom Python function tools.
+
+```python
+from crewai import Agent, Crew, LLM, Process, Task
+from crewai.tools import tool
+from crewai_tools import TavilySearchTool
+from dotenv import load_dotenv
+
+load_dotenv()
+
+llm = LLM(model="openai/gpt-4o", temperature=0.2)
+web_search_tool = TavilySearchTool()
+```
+
+##### 3. Agents
+
+* Agents are specialized workers.
+* Give each agent a clear role, goal, and backstory.
+* Attach tools to the agent when the agent should decide which capability to use.
+* Pass the initialized `llm` explicitly so examples are clear and reusable.
+
+```python
+research_agent = Agent(
+    role="Senior Research Analyst",
+    goal="Find and synthesize current information about a topic.",
+    backstory="You are a careful researcher who verifies facts before summarizing them.",
+    tools=[web_search_tool],
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+```
+
+##### 4. Tasks
+
+* Tasks describe a specific assignment for an agent.
+* Use placeholders such as `{topic}` for runtime inputs passed to `crew.kickoff(...)`.
+* Use `context=[previous_task]` when a task depends on earlier task output.
+* Use `tools=[...]` on a task when that specific step should control tool access.
+
+```python
+research_task = Task(
+    description="Research the most important recent developments about {topic}.",
+    expected_output="A concise report with key findings and source-aware context.",
+    agent=research_agent,
+)
+```
+
+##### 5. Crews
+
+* A crew assembles agents and tasks into an executable workflow.
+* `Process.sequential` runs tasks in order and is the clearest default for tutorials.
+* `kickoff(inputs={...})` starts the workflow and fills task placeholders.
+
+```python
+research_crew = Crew(
+    agents=[research_agent],
+    tasks=[research_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+result = research_crew.kickoff(inputs={"topic": "AI in healthcare"})
+print(result.raw)
+```
+
+##### 6. Custom Function Tools
+
+* Custom tools are normal Python functions exposed to CrewAI.
+* Use `@tool("Tool Name")` from `crewai.tools`.
+* The function name, type hints, and docstring help the model understand how to call the tool.
+* Keep tools narrow and deterministic when possible.
+
+```python
+import re
+
+from crewai.tools import tool
+
+
+@tool("Add Numbers")
+def add_numbers(text: str) -> int:
+    """Extract integers from text and return their sum."""
+    numbers = [int(value) for value in re.findall(r"-?\d+", text)]
+    return sum(numbers)
+
+
+@tool("Multiply Numbers")
+def multiply_numbers(text: str) -> int:
+    """Extract integers from text and return their product."""
+    numbers = [int(value) for value in re.findall(r"-?\d+", text)]
+    product = 1
+    for number in numbers:
+        product *= number
+    return product
+```
+
+##### 7. Agent-Centric Tools
+
+* In agent-centric tool assignment, tools are attached directly to the agent.
+* The agent decides which tool to use during the task.
+* This is flexible, but less predictable when many tools are available.
+
+```python
+calculator_agent = Agent(
+    role="Calculator",
+    goal="Extract numbers from user instructions and choose the correct math tool.",
+    backstory="You are precise and always use the right arithmetic operation.",
+    tools=[add_numbers, multiply_numbers],
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+calculator_task = Task(
+    description="Compute the result requested here: {calculation_request}",
+    expected_output="The extracted numbers and the final arithmetic result.",
+    agent=calculator_agent,
+)
+
+calculator_crew = Crew(
+    agents=[calculator_agent],
+    tasks=[calculator_task],
+    process=Process.sequential,
+    verbose=True,
+)
+
+calculator_result = calculator_crew.kickoff(
+    inputs={"calculation_request": "Add 7, 8, 9, and 10."}
+)
+```
+
+##### 8. Task-Centric Tools
+
+* In task-centric tool assignment, tools are attached to individual tasks.
+* This makes each step more explicit and easier to debug.
+* Task-level tools are useful when a workflow should control when a capability is available.
+
+```python
+customer_service_agent = Agent(
+    role="Customer Service Specialist",
+    goal="Answer customer questions by following a controlled workflow.",
+    backstory="You follow each task carefully and only use tools assigned to that task.",
+    tools=[],
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+)
+
+web_lookup_task = Task(
+    description="Search for current public information about this customer question: {question}",
+    expected_output="Relevant web findings, or a clear note if nothing useful was found.",
+    tools=[web_search_tool],
+    agent=customer_service_agent,
+)
+
+answer_task = Task(
+    description="Use the prior findings to draft a friendly answer to: {question}",
+    expected_output="A clear customer-facing answer.",
+    agent=customer_service_agent,
+    context=[web_lookup_task],
+)
+
+support_crew = Crew(
+    agents=[customer_service_agent],
+    tasks=[web_lookup_task, answer_task],
+    process=Process.sequential,
+    verbose=True,
+)
+```
+
+##### 9. Structured Outputs with Pydantic
+
+* Use Pydantic models when downstream code needs predictable fields.
+* Attach the schema with `output_pydantic=ModelName`.
+* Access the validated object from task output or the crew result when available.
+
+```python
+from pydantic import BaseModel, Field
+
+
+class ShoppingPlan(BaseModel):
+    total_budget: str = Field(description="Estimated total budget")
+    items: list[str] = Field(description="Shopping list items")
+    tips: list[str] = Field(description="Money-saving tips")
+
+
+shopping_task = Task(
+    description="Create a grocery shopping plan for {meal_name}.",
+    expected_output="A structured shopping plan.",
+    agent=research_agent,
+    output_pydantic=ShoppingPlan,
+)
+```
+
+##### 10. CrewBase and YAML
+
+* `@CrewBase` is useful when a crew grows beyond a small script or notebook.
+* YAML stores prompt-like configuration: roles, goals, backstories, task descriptions, expected outputs.
+* Python stores executable behavior: tools, schemas, model configuration, and crew assembly.
+* Define `@CrewBase` classes in `.py` files so CrewAI can resolve config paths reliably.
+
+```python
+from typing import List
+
+from crewai import Agent, Crew, Process, Task
+from crewai.agents.agent_builder.base_agent import BaseAgent
+from crewai.project import CrewBase, agent, crew, task
+
+
+@CrewBase
+class ResearchCrew:
+    agents: List[BaseAgent]
+    tasks: List[Task]
+
+    agents_config = "config/agents.yaml"
+    tasks_config = "config/tasks.yaml"
+
+    @agent
+    def researcher(self) -> Agent:
+        return Agent(
+            config=self.agents_config["researcher"],  # type: ignore[index]
+            tools=[web_search_tool],
+            llm=llm,
+            verbose=True,
+        )
+
+    @task
+    def research_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["research_task"],  # type: ignore[index]
+        )
+
+    @crew
+    def crew(self) -> Crew:
+        return Crew(
+            agents=self.agents,
+            tasks=self.tasks,
+            process=Process.sequential,
+            verbose=True,
+        )
+```
+
+##### 11. Quick Design Rules
+
+* Attach tools to agents when autonomy is useful.
+* Attach tools to tasks when the workflow should be controlled and auditable.
+* Use custom tools for deterministic domain logic or API calls.
+* Use Tavily or another search tool only when current external information is needed.
+* Use `output_pydantic` when later code depends on specific fields.
+* Keep notebooks Python-first; use `@CrewBase` and YAML for reusable project layouts.
 
 ### Extra: Combining CrewAI with LangGraph
 
