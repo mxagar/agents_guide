@@ -47,9 +47,28 @@ Table of Contents:
     - [Summary and Evaluation](#summary-and-evaluation)
       - [Exercise: Building your own AI Nutrition Coach using a Multi-Agent System and Multimodal AI](#exercise-building-your-own-ai-nutrition-coach-using-a-multi-agent-system-and-multimodal-ai)
       - [Summary and Cheat Sheet: Custom Tools in CrewAI](#summary-and-cheat-sheet-custom-tools-in-crewai)
+        - [1. What is CrewAI?](#1-what-is-crewai)
+        - [2. Current Setup Pattern](#2-current-setup-pattern)
+        - [3. Agents](#3-agents)
+        - [4. Tasks](#4-tasks)
+        - [5. Crews](#5-crews)
+        - [6. Custom Function Tools](#6-custom-function-tools)
+        - [7. Agent-Centric Tools](#7-agent-centric-tools)
+        - [8. Task-Centric Tools](#8-task-centric-tools)
+        - [9. Structured Outputs with Pydantic](#9-structured-outputs-with-pydantic)
+        - [10. CrewBase and YAML](#10-crewbase-and-yaml)
+        - [11. Quick Design Rules](#11-quick-design-rules)
     - [Extra: Combining CrewAI with LangGraph](#extra-combining-crewai-with-langgraph)
+      - [Pattern 1: Call a CrewAI Crew from a LangGraph Node](#pattern-1-call-a-crewai-crew-from-a-langgraph-node)
+      - [Pattern 2: Use LangGraph to Route Between Crews](#pattern-2-use-langgraph-to-route-between-crews)
+      - [Pattern 3: Call a LangGraph Workflow from a CrewAI Tool](#pattern-3-call-a-langgraph-workflow-from-a-crewai-tool)
+      - [Practical Guidance](#practical-guidance)
   - [3. Alternative Agentic Frameworks: BeeAI and AutoGen (AG2)](#3-alternative-agentic-frameworks-beeai-and-autogen-ag2)
     - [BeeAI Core Concepts and Architecture](#beeai-core-concepts-and-architecture)
+      - [BeeAI Core Components](#beeai-core-components)
+      - [BeeAI Agents](#beeai-agents)
+      - [Custom Tools](#custom-tools)
+      - [Exercise: Building Agentic AI Systems with the BeeAI Framework](#exercise-building-agentic-ai-systems-with-the-beeai-framework)
     - [AG2 (AutoGen) Core Concepts, Architecture and Conversation Patterns](#ag2-autogen-core-concepts-architecture-and-conversation-patterns)
     - [Summary and Cheat Sheet: BeeAI and AG2](#summary-and-cheat-sheet-beeai-and-ag2)
   - [4. Extra: Pydantic AI](#4-extra-pydantic-ai)
@@ -4361,6 +4380,656 @@ print(result.raw)
 ## 3. Alternative Agentic Frameworks: BeeAI and AutoGen (AG2)
 
 ### BeeAI Core Concepts and Architecture
+
+#### BeeAI Core Components
+
+* BeeAI is an agentic framework for building autonomous agents and multi-agent systems.
+* Core architecture:
+  * `ChatModel` abstracts the LLM backend and lets the same agent code work with different model providers.
+  * agents combine an LLM, instructions, memory, and tools into a reasoning/action loop.
+  * tools extend agents with capabilities such as search, weather, code execution, handoffs, and custom functions.
+  * memory stores conversation or execution context so agents can use prior messages while solving a task.
+  * workflows orchestrate multiple agents into larger systems, including sequential, parallel, and synthesis-style flows.
+  * coroutine-based execution lets agents and workflows run asynchronously with `async` / `await`.
+  * events/emitters expose intermediate execution details for logging, tracing, debugging, and observability.
+  * serving/adapters can expose agents through APIs or interoperability protocols such as A2A.
+* Common BeeAI building blocks:
+  * `RequirementAgent`: instruction-driven agent that can call tools to satisfy a user requirement.
+  * `ReActAgent`: reason-and-act style agent for iterative tool use.
+  * `AgentWorkflow`: coordinates named agents and workflow inputs.
+  * `HandoffTool`: lets a coordinator agent delegate work to specialist agents.
+  * `UnconstrainedMemory` / `TokenMemory`: memory options for retaining context.
+* Typical design pattern:
+  * create a shared `ChatModel`
+  * define specialist agents with focused instructions and tool access
+  * give each agent memory
+  * optionally create a coordinator agent or workflow to route tasks
+  * run the top-level agent/workflow with `await` and observe events or final messages
+* BeeAI is strongest when an application needs production-oriented agent components:
+  * provider-independent model access
+  * modular tool integration
+  * explicit memory
+  * multi-agent orchestration
+  * async/coroutine execution for concurrent or non-blocking flows
+  * observability
+  * deployable/servable agent interfaces
+
+```python
+import asyncio
+
+from beeai_framework.agents.requirement import RequirementAgent
+from beeai_framework.backend import ChatModel
+from beeai_framework.memory import UnconstrainedMemory
+from beeai_framework.tools.handoff import HandoffTool
+from beeai_framework.tools.search.wikipedia import WikipediaTool
+from beeai_framework.tools.think import ThinkTool
+from beeai_framework.tools.weather import OpenMeteoTool
+
+
+async def main() -> None:
+    llm = ChatModel.from_name("openai:gpt-4o-mini")
+    # llm = ChatModel.from_name("ollama:granite3.3")
+
+    research_agent = RequirementAgent(
+        llm=llm,
+        tools=[ThinkTool(), WikipediaTool()],
+        memory=UnconstrainedMemory(),
+        instructions="Research factual background and explain it clearly.",
+    )
+
+    weather_agent = RequirementAgent(
+        llm=llm,
+        tools=[ThinkTool(), OpenMeteoTool()],
+        memory=UnconstrainedMemory(),
+        instructions="Answer weather questions with available forecast data.",
+    )
+
+    coordinator = RequirementAgent(
+        llm=llm,
+        memory=UnconstrainedMemory(),
+        tools=[
+            HandoffTool(
+                target=research_agent,
+                name="research_specialist",
+                description="Use for history, facts, and general knowledge.",
+            ),
+            HandoffTool(
+                target=weather_agent,
+                name="weather_specialist",
+                description="Use for current weather and forecast questions.",
+            ),
+        ],
+        instructions="Route the request to the right specialist and combine the results.",
+    )
+
+    response = await coordinator.run(
+        "What is Paris known for, and what is the weather there today?"
+    )
+    print(response.last_message.text)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### BeeAI Agents
+
+* BeeAI agents are stateful, tool-enabled LLM components that can follow instructions, use memory, call tools, and run asynchronously.
+* Main agent types:
+  * `RequirementAgent`: general-purpose, controllable agent that supports instructions, tools, memory, and behavioral requirements.
+  * `ReActAgent`: reason-and-act agent that iterates through thinking, tool use, observation, and final answer generation.
+  * `ToolCallingAgent`: agent optimized for models and workflows that rely on explicit tool calls.
+* A typical BeeAI agent is configured with:
+  * `llm`: model backend, usually created with `ChatModel.from_name(...)`
+  * `role` and `instructions`: behavior, persona, and task boundaries
+  * `tools`: external capabilities such as search, weather, code execution, or custom domain tools
+  * `memory`: conversation or execution state, such as `UnconstrainedMemory`
+  * `requirements`: rules that control tool usage and agent behavior
+  * `middlewares`: observability and execution tracking hooks
+* BeeAI agents run as coroutines:
+  * call `await agent.run(...)` inside an `async` function
+  * use `asyncio.run(main())` at the script boundary
+  * this makes agents easier to combine with async workflows, APIs, streaming, and concurrent execution
+* Requirements add production control over agent behavior:
+  * `ConditionalRequirement` can force a tool at a step, limit tool usage, prevent consecutive calls, or require one tool after another.
+  * `AskPermissionRequirement` adds human approval before sensitive tool calls.
+  * requirements are useful for predictable workflows, compliance, cost control, and safer tool use.
+* Tools are the agent's action surface:
+  * built-in tools include `ThinkTool`, `WikipediaTool`, `OpenMeteoTool`, and search tools.
+  * custom tools can be created for domain-specific actions.
+  * `ThinkTool` can be combined with requirements to create a ReAct-style think -> act -> observe loop.
+* Middleware and events make agent execution observable:
+  * `GlobalTrajectoryMiddleware` can record tool usage and execution flow.
+  * `.on(...)` event handlers can inspect starts, successes, model responses, and nested execution events.
+* Multi-agent behavior is built by composing agents:
+  * specialist agents handle focused tasks.
+  * coordinator agents use tools such as `HandoffTool` to delegate work.
+  * workflows can orchestrate agents for sequential, parallel, or synthesis-based execution.
+
+```python
+import asyncio
+
+from beeai_framework.agents.requirement import RequirementAgent
+from beeai_framework.agents.requirement.requirements.conditional import ConditionalRequirement
+from beeai_framework.backend import ChatModel
+from beeai_framework.memory import UnconstrainedMemory
+from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
+from beeai_framework.tools import Tool
+from beeai_framework.tools.search.wikipedia import WikipediaTool
+from beeai_framework.tools.think import ThinkTool
+from beeai_framework.tools.weather import OpenMeteoTool
+
+
+async def main() -> None:
+    agent = RequirementAgent(
+        llm=ChatModel.from_name("openai:gpt-4o-mini"),
+        role="travel research assistant",
+        instructions=(
+            "Answer with concise, useful travel context. Use tools when current "
+            "or factual information is needed."
+        ),
+        memory=UnconstrainedMemory(),
+        tools=[ThinkTool(), WikipediaTool(), OpenMeteoTool()],
+        requirements=[
+            ConditionalRequirement(
+                ThinkTool,
+                force_at_step=1,
+                force_after=Tool,
+                consecutive_allowed=False,
+                max_invocations=3,
+            ),
+            ConditionalRequirement(WikipediaTool, max_invocations=1),
+            ConditionalRequirement(OpenMeteoTool, max_invocations=1),
+        ],
+        middlewares=[GlobalTrajectoryMiddleware(included=[Tool])],
+    )
+
+    response = await agent.run(
+        "Give me a short travel brief for Paris, including one historical fact and today's weather."
+    )
+    print(response.last_message.text)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Custom Tools
+
+* Custom tools are used when an agent needs domain-specific actions that are not built into BeeAI.
+* A custom tool usually has:
+  * a Pydantic input schema
+  * a `Tool` subclass
+  * a `name` and `description` for the agent
+  * an async `_run(...)` method that performs the action
+  * a tool output type such as `StringToolOutput`
+* After the tool is defined, it can be added to an agent's `tools=[...]` list like any built-in tool.
+
+```python
+import asyncio
+
+from pydantic import BaseModel, Field
+
+from beeai_framework.agents.requirement import RequirementAgent
+from beeai_framework.backend import ChatModel
+from beeai_framework.context import RunContext
+from beeai_framework.memory import UnconstrainedMemory
+from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+
+
+class MathInput(BaseModel):
+    a: int = Field(description="The first number to add.")
+    b: int = Field(description="The second number to add.")
+
+
+class AddTool(Tool[MathInput, ToolRunOptions, StringToolOutput]):
+    name = "Add"
+    description = "Adds two integers and returns the result."
+    input_schema = MathInput
+
+    async def _run(
+        self,
+        input: MathInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        return StringToolOutput(result=f"{input.a} + {input.b} = {input.a + input.b}")
+
+
+async def main() -> None:
+    agent = RequirementAgent(
+        llm=ChatModel.from_name("openai:gpt-4o-mini"),
+        memory=UnconstrainedMemory(),
+        tools=[AddTool()],
+        instructions="Use the Add tool when arithmetic is required.",
+    )
+
+    response = await agent.run("What is 128 plus 256?")
+    print(response.last_message.text)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Exercise: Building Agentic AI Systems with the BeeAI Framework
+
+Notebook: [07_beeai.ipynb](lab/07_beeiai/07_beeai.ipynb).
+
+Instructions: [Instructions.md](lab/07_beeiai/Instructions.md).
+
+* The notebook adapts the BeeAI lab into a runnable local Jupyter workflow.
+* It uses OpenAI models through BeeAI's `ChatModel` abstraction.
+* It uses top-level `await` because BeeAI agents, tools, and model calls are coroutine-based.
+* It covers:
+  * basic chat with `ChatModel`
+  * reusable prompt templates
+  * structured output with Pydantic
+  * minimal `RequirementAgent` usage
+  * a Tavily-backed custom search tool
+  * controlled ReAct-style reasoning with `ThinkTool` and `ConditionalRequirement`
+  * a custom calculator tool
+  * multi-agent travel planning with `HandoffTool`
+* Required environment variables:
+  * `OPENAI_API_KEY` for all model-backed cells
+  * `TAVILY_API_KEY` for live Tavily web search cells
+  * optional `OPENAI_MODEL`, defaulting to `openai:gpt-4o-mini`
+
+```python
+# %% Cell 1
+import json
+import logging
+import math
+import os
+import re
+from typing import Any
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+# RequirementAgent is the main BeeAI agent class used in these examples.
+from beeai_framework.agents.requirement import RequirementAgent
+
+# ConditionalRequirement constrains tool usage: order, frequency, and forced steps.
+from beeai_framework.agents.requirement.requirements.conditional import ConditionalRequirement
+
+# ChatModel is BeeAI's provider-agnostic LLM wrapper. Message classes represent chat turns.
+from beeai_framework.backend import ChatModel, ChatModelParameters, SystemMessage, UserMessage
+
+# RunContext, Emitter, ToolRunOptions, and output classes are used when defining custom tools.
+from beeai_framework.context import RunContext
+from beeai_framework.emitter import Emitter
+
+# UnconstrainedMemory keeps the agent conversation/history available during a run.
+from beeai_framework.memory import UnconstrainedMemory
+
+# GlobalTrajectoryMiddleware records tool/agent execution flow for observability.
+from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
+
+# Tool is the base class for custom tools. StringToolOutput is a simple text result wrapper.
+from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+
+# HandoffTool lets one agent delegate work to another agent.
+from beeai_framework.tools.handoff import HandoffTool
+
+# ThinkTool gives the agent an explicit reasoning/planning action.
+from beeai_framework.tools.think import ThinkTool
+
+# OpenMeteoTool is a built-in weather tool used by the travel examples.
+from beeai_framework.tools.weather import OpenMeteoTool
+
+load_dotenv()
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+
+MODEL_NAME = os.getenv("OPENAI_MODEL", "openai:gpt-4o-mini")
+
+if not os.getenv("OPENAI_API_KEY"):
+    raise RuntimeError("Set OPENAI_API_KEY before running this notebook.")
+
+# One shared LLM instance is reused by all examples. temperature=0 keeps outputs steadier.
+llm = ChatModel.from_name(MODEL_NAME, ChatModelParameters(temperature=0))
+
+# Small display helper so each cell prints a readable section header.
+def show(title: str, text: Any) -> None:
+    print(f"\n{'=' * 80}\n{title}\n{'=' * 80}")
+    print(text)
+
+# BeeAI response shapes vary slightly by component/version; this extracts the final text.
+def agent_text(response: Any) -> str:
+    if hasattr(response, "last_message") and response.last_message is not None:
+        return response.last_message.text
+    if hasattr(response, "answer") and response.answer is not None:
+        return response.answer.text
+    return str(response)
+
+show("Model", MODEL_NAME)
+
+# %% Cell 2
+async def basic_chat_example() -> None:
+    # SystemMessage sets the assistant behavior; UserMessage is the actual request.
+    messages = [
+        SystemMessage("You are a helpful AI assistant and creative writing expert."),
+        UserMessage(
+            "Help me brainstorm a unique business idea for a food delivery service "
+            "that does not exist yet."
+        ),
+    ]
+    # llm.run(...) is asynchronous because model calls are network operations.
+    response = await llm.run(messages)
+    show("Basic chat", response.get_text_content())
+
+await basic_chat_example()
+
+# %% Cell 3
+class SimplePromptTemplate:
+    # This tiny class mimics common prompt-template libraries without extra dependencies.
+    def __init__(self, template: str):
+        self.template = template
+
+    def render(self, variables: dict[str, Any]) -> str:
+        rendered = self.template
+        for key in variables:
+            rendered = rendered.replace(f"{{{{{key}}}}}", f"{{{key}}}")
+        return rendered.format(**variables)
+
+async def prompt_template_example() -> None:
+    template = SimplePromptTemplate(
+        """
+You are a senior data scientist evaluating a machine learning project proposal.
+
+Project Details:
+- Project Name: {{project_name}}
+- Business Problem: {{business_problem}}
+- Available Data: {{data_description}}
+- Timeline: {{timeline}}
+- Success Metrics: {{success_metrics}}
+
+Please provide:
+1. Feasibility assessment (1-10 scale)
+2. Key technical challenges
+3. Recommended approach
+4. Risk mitigation strategies
+5. Expected outcomes
+        """.strip()
+    )
+    scenario = {
+        "project_name": "Smart Inventory Optimization",
+        "business_problem": "Reduce inventory costs while maintaining 95% product availability",
+        "data_description": "2 years of sales data, supplier lead times, seasonal patterns, 500K records",
+        "timeline": "3 months development, 1 month testing",
+        "success_metrics": "15% cost reduction, maintain 95% availability, less than 2% forecast error",
+    }
+    prompt = template.render(scenario)
+    response = await llm.run([UserMessage(prompt)])
+    show("Rendered prompt", prompt)
+    show("Project evaluation", response.get_text_content())
+
+await prompt_template_example()
+
+# %% Cell 4
+class BusinessPlan(BaseModel):
+    # Pydantic describes the exact structured object we want the model to return.
+    business_name: str = Field(description="A concise business name.")
+    target_market: str = Field(description="The primary customer segment.")
+    value_proposition: str = Field(description="The main customer benefit.")
+    revenue_model: str = Field(description="How the business makes money.")
+    first_90_days: list[str] = Field(description="Practical launch actions.")
+
+async def structured_output_example() -> None:
+    # response_format asks BeeAI/model backend to return data matching BusinessPlan.
+    response = await llm.run(
+        [UserMessage("Create a concise business plan for a zero-waste meal prep service.")],
+        response_format=BusinessPlan,
+    )
+    show("Structured business plan", json.dumps(response.output_structured.model_dump(), indent=2))
+
+await structured_output_example()
+
+# %% Cell 5
+ANALYSIS_QUERY = "Analyze the cybersecurity risks of adopting generative AI in a small financial services company."
+
+async def minimal_agent_example() -> None:
+    agent = RequirementAgent(
+        # llm is the model used for planning and final answers.
+        llm=llm,
+        # memory stores conversation state for this agent run/session.
+        memory=UnconstrainedMemory(),
+        instructions=(
+            "You are a careful cybersecurity analyst. Provide concise, practical, "
+            "risk-aware recommendations."
+        ),
+    )
+    # agent.run(...) executes the agent loop and returns the final agent response.
+    response = await agent.run(ANALYSIS_QUERY)
+    show("Minimal agent", agent_text(response))
+
+await minimal_agent_example()
+
+# %% Cell 6
+class TavilySearchInput(BaseModel):
+    # Tool input schemas tell the LLM which arguments it can pass to the tool.
+    query: str = Field(description="Search query to send to Tavily.")
+    max_results: int = Field(default=3, ge=1, le=5, description="Maximum number of results.")
+
+class TavilySearchTool(Tool[TavilySearchInput, ToolRunOptions, StringToolOutput]):
+    # A BeeAI custom tool wraps normal Python code so an agent can call it.
+    name = "TavilySearch"
+    description = "Search the web for current information using Tavily."
+    input_schema = TavilySearchInput
+
+    def _create_emitter(self) -> Emitter:
+        # Emitters label tool events, which helps middleware/debugging identify this tool.
+        return Emitter.root().child(namespace=["tool", "search", "tavily"], creator=self)
+
+    async def _run(
+        self,
+        input: TavilySearchInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        # _run is the actual tool implementation BeeAI executes after the agent selects it.
+        api_key = os.getenv("TAVILY_API_KEY")
+        if not api_key:
+            return StringToolOutput(
+                result="TAVILY_API_KEY is not set, so live web search was skipped."
+            )
+        from tavily import TavilyClient
+
+        client = TavilyClient(api_key=api_key)
+        raw = client.search(query=input.query, max_results=input.max_results)
+        results = raw.get("results", [])
+        lines = []
+        for item in results:
+            title = item.get("title", "Untitled")
+            url = item.get("url", "")
+            content = re.sub(r"\s+", " ", item.get("content", "")).strip()
+            lines.append(f"- {title}: {content}\n  Source: {url}")
+        return StringToolOutput(result="\n".join(lines) or "No Tavily results found.")
+
+async def tavily_agent_example() -> None:
+    agent = RequirementAgent(
+        llm=llm,
+        memory=UnconstrainedMemory(),
+        # tools are the actions the agent may choose during its reasoning loop.
+        tools=[ThinkTool(), TavilySearchTool()],
+        instructions=(
+            "You are a research assistant. Think briefly, search when current facts "
+            "are needed, and include source URLs when search results are available."
+        ),
+        requirements=[
+            # Force the agent to plan first, then limit search calls to control cost/noise.
+            ConditionalRequirement(ThinkTool, force_at_step=1, consecutive_allowed=False),
+            ConditionalRequirement(TavilySearchTool, max_invocations=2),
+        ],
+        # Middleware records tool calls so you can inspect the trajectory while debugging.
+        middlewares=[GlobalTrajectoryMiddleware(included=[Tool])],
+    )
+    response = await agent.run("What are two current risks companies should consider before deploying AI agents?")
+    show("Tavily-enhanced agent", agent_text(response))
+
+await tavily_agent_example()
+
+# %% Cell 7
+async def controlled_reasoning_example() -> None:
+    agent = RequirementAgent(
+        llm=llm,
+        memory=UnconstrainedMemory(),
+        tools=[ThinkTool(), TavilySearchTool()],
+        instructions=(
+            "Analyze the problem systematically. Use search only if external facts "
+            "would materially improve the answer."
+        ),
+        requirements=[
+            # This creates a ReAct-like pattern: think first, then think again after tool use.
+            ConditionalRequirement(
+                ThinkTool,
+                force_at_step=1,
+                force_after=Tool,
+                consecutive_allowed=False,
+                max_invocations=3,
+            ),
+            # Search is only allowed after thinking and only once in this compact example.
+            ConditionalRequirement(TavilySearchTool, only_after=[ThinkTool], max_invocations=1),
+        ],
+        middlewares=[GlobalTrajectoryMiddleware(included=[Tool])],
+    )
+    response = await agent.run(
+        "Create a short risk checklist for using AI agents in customer support operations."
+    )
+    show("Controlled ReAct-style agent", agent_text(response))
+
+await controlled_reasoning_example()
+
+# %% Cell 8
+class CalculatorInput(BaseModel):
+    # The calculator accepts one string expression from the agent.
+    expression: str = Field(description="A simple arithmetic expression, such as '12 * (4 + 5)'.")
+
+class SimpleCalculatorTool(Tool[CalculatorInput, ToolRunOptions, StringToolOutput]):
+    # Tool[...] declares: input schema, run options type, and output type.
+    name = "SimpleCalculator"
+    description = "Safely evaluates simple arithmetic expressions."
+    input_schema = CalculatorInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "math", "calculator"], creator=self)
+
+    def _safe_calculate(self, expression: str) -> float:
+        # Keep eval tightly sandboxed and limited to simple arithmetic/math helpers.
+        allowed = {"abs": abs, "round": round, "sqrt": math.sqrt, "pow": pow}
+        if not re.fullmatch(r"[0-9+\-*/()., sqrtpowabslround\s]+", expression):
+            raise ValueError("Expression contains unsupported characters.")
+        return float(eval(expression, {"__builtins__": {}}, allowed))
+
+    async def _run(
+        self,
+        input: CalculatorInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        # Returning StringToolOutput gives the agent a text observation to reason over.
+        try:
+            result = self._safe_calculate(input.expression)
+            return StringToolOutput(result=f"{input.expression} = {result:g}")
+        except Exception as exc:
+            return StringToolOutput(result=f"Calculation error: {exc}")
+
+async def calculator_agent_example() -> None:
+    agent = RequirementAgent(
+        llm=llm,
+        memory=UnconstrainedMemory(),
+        # The agent can decide to call this calculator instead of doing arithmetic in text.
+        tools=[SimpleCalculatorTool()],
+        instructions="Use the calculator tool for arithmetic. Explain the result briefly.",
+    )
+    response = await agent.run("A subscription costs 29.99 per month. What is the annual cost plus 8 percent tax?")
+    show("Calculator agent", agent_text(response))
+
+await calculator_agent_example()
+
+# %% Cell 9
+async def multi_agent_travel_planner() -> None:
+    # Specialist 1: researches destination facts and practical travel context.
+    destination_expert = RequirementAgent(
+        llm=llm,
+        tools=[ThinkTool(), TavilySearchTool()],
+        memory=UnconstrainedMemory(),
+        instructions=(
+            "You are a destination research expert. Focus on attractions, practical travel context, "
+            "and safety considerations. Use search for current or factual details."
+        ),
+        requirements=[
+            ConditionalRequirement(ThinkTool, force_at_step=1, consecutive_allowed=False),
+            ConditionalRequirement(TavilySearchTool, max_invocations=2),
+        ],
+    )
+
+    # Specialist 2: handles weather and packing/activity implications.
+    travel_meteorologist = RequirementAgent(
+        llm=llm,
+        tools=[ThinkTool(), OpenMeteoTool()],
+        memory=UnconstrainedMemory(),
+        instructions=(
+            "You are a travel meteorologist. Provide weather-aware packing and activity guidance."
+        ),
+        requirements=[
+            ConditionalRequirement(ThinkTool, force_at_step=1, consecutive_allowed=False),
+            ConditionalRequirement(OpenMeteoTool, max_invocations=1),
+        ],
+    )
+
+    # Specialist 3: handles language, etiquette, and cultural guidance.
+    language_expert = RequirementAgent(
+        llm=llm,
+        tools=[ThinkTool(), TavilySearchTool()],
+        memory=UnconstrainedMemory(),
+        instructions=(
+            "You are a language and cultural etiquette expert. Give practical phrases, customs, "
+            "and respectful communication advice."
+        ),
+        requirements=[ConditionalRequirement(ThinkTool, force_at_step=1, consecutive_allowed=False)],
+    )
+
+    # The coordinator is the user-facing agent. It delegates to specialists via HandoffTool.
+    coordinator = RequirementAgent(
+        llm=llm,
+        memory=UnconstrainedMemory(),
+        tools=[
+            ThinkTool(),
+            # Each HandoffTool exposes a specialist agent as a callable tool.
+            HandoffTool(
+                target=destination_expert,
+                name="DestinationResearch",
+                description="Consult for destination attractions, logistics, safety, and practical guidance.",
+            ),
+            HandoffTool(
+                target=travel_meteorologist,
+                name="WeatherPlanning",
+                description="Consult for weather, packing, and activity planning.",
+            ),
+            HandoffTool(
+                target=language_expert,
+                name="LanguageCulturalGuidance",
+                description="Consult for phrases, etiquette, customs, and cultural awareness.",
+            ),
+        ],
+        instructions=(
+            "You are the travel coordinator. Delegate to specialists when helpful, then synthesize "
+            "a concise travel plan with destination, weather, and cultural guidance."
+        ),
+        requirements=[ConditionalRequirement(ThinkTool, force_at_step=1, consecutive_allowed=False)],
+        middlewares=[GlobalTrajectoryMiddleware(included=[Tool])],
+    )
+
+    query = (
+        "I am planning a 10-day first-time cultural trip to Japan, split between Tokyo and Kyoto. "
+        "I speak English only. What destination, weather, and etiquette guidance should I know?"
+    )
+    response = await coordinator.run(query)
+    show("Multi-agent travel planner", agent_text(response))
+
+await multi_agent_travel_planner()
+```
 
 ### AG2 (AutoGen) Core Concepts, Architecture and Conversation Patterns
 
