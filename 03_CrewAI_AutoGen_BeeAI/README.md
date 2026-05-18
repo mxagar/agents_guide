@@ -70,7 +70,11 @@ Table of Contents:
       - [Custom Tools](#custom-tools)
       - [Exercise: Building Agentic AI Systems with the BeeAI Framework](#exercise-building-agentic-ai-systems-with-the-beeai-framework)
     - [AG2 (AutoGen) Core Concepts, Architecture and Conversation Patterns](#ag2-autogen-core-concepts-architecture-and-conversation-patterns)
+      - [Introduction to AG2](#introduction-to-ag2)
       - [Extending AG2 with Custom Tools and Structured Outputs](#extending-ag2-with-custom-tools-and-structured-outputs)
+      - [Agent Orchestration and Design Patterns in AG2](#agent-orchestration-and-design-patterns-in-ag2)
+      - [Exercise: AG2 (AutoGen) 101](#exercise-ag2-autogen-101)
+      - [Exercise: Build Multi-Agent Chatbot with AG2 (AutoGen) for Healthcare](#exercise-build-multi-agent-chatbot-with-ag2-autogen-for-healthcare)
     - [Summary and Cheat Sheet: BeeAI and AG2](#summary-and-cheat-sheet-beeai-and-ag2)
   - [4. Extra: Pydantic AI](#4-extra-pydantic-ai)
 
@@ -5034,6 +5038,8 @@ await multi_agent_travel_planner()
 
 ### AG2 (AutoGen) Core Concepts, Architecture and Conversation Patterns
 
+#### Introduction to AG2
+
 * [AG2](https://github.com/ag2ai/ag2), formerly AutoGen, is a conversation-first framework for building systems where agents, tools, code executors, and humans collaborate through message exchange.
 * The central idea is that the workflow is modeled as a chat rather than as a fixed task list or graph.
   * Each agent receives messages.
@@ -5367,6 +5373,447 @@ brief = RiskBrief.model_validate_json(raw_content)
 
 print(json.dumps(brief.model_dump(), indent=2))
 ```
+
+#### Agent Orchestration and Design Patterns in AG2
+
+* AG2 orchestration mechanisms beyond the basic two-agent, group chat, custom tool, and structured-output patterns above.
+* Sequential chat pattern:
+  * Chains multiple two-agent chats in a fixed order.
+  * Uses `initiate_chats()`.
+  * Passes earlier results forward as `carryover`.
+  * Useful for staged workflows such as ideation, drafting, and formatting.
+* Nested chat pattern:
+  * Encapsulates a multi-agent workflow behind one trigger agent.
+  * Uses `register_nested_chats()`.
+  * The nested workflow can contain sequential chats or group chats.
+  * Useful when a reusable sub-workflow should appear as one step in a larger conversation.
+* Conversation summarization:
+  * `initiate_chat()` can include summarization settings.
+  * A chat result can be summarized with strategies such as LLM-based reflection.
+  * Sequential chats can pass summaries into later steps.
+* Group chat orchestration pattern classes:
+  * `DefaultPattern` requires explicit agent handoffs.
+  * `AutoPattern` lets an LLM choose the next speaker from context.
+  * `RoundRobinPattern` rotates through agents in a fixed sequence.
+  * `RandomPattern` selects a random next speaker.
+  * `ManualPattern` lets a human choose the next speaker.
+* Tool-driven routing:
+  * Tools can return `ReplyResult`.
+  * `ReplyResult` can include a response message, a transition target, and context updates.
+  * This lets tool calls influence which agent speaks next.
+* Context variables:
+  * `ContextVariables` provides shared key-value state for group workflows.
+  * Context variables persist across tool calls and interactions.
+  * They are not automatically injected into LLM prompts unless explicitly referenced.
+  * Useful for routing based on workflow state, such as severity or escalation level.
+* Handoffs and routing:
+  * `OnCondition` supports LLM-based routing from message content.
+  * `OnContextCondition` supports routing from `context_variables`.
+  * After-work or default routing defines fallback behavior.
+  * Tools can route by returning a `ReplyResult` transition.
+* Guardrails:
+  * Guardrails can intercept agent inputs or outputs.
+  * `RegexGuardrail` detects pattern-based issues such as sensitive identifiers.
+  * `LLMGuardrail` applies semantic safety checks.
+  * Guardrails can redirect control to a safety or compliance agent.
+* Additional termination mechanisms:
+  * `max_turns` can stop two-agent chats.
+  * User input such as `exit` can stop chats when human input is enabled.
+  * A pattern returning `None` can halt the conversation.
+  * `TerminateTarget` can end routing when no further handoff is possible.
+  * Custom reply logic can return `(True, None)` to intentionally end a chat.
+
+#### Exercise: AG2 (AutoGen) 101
+
+Notebook: [`lab/08_AG2_101_AutoGen_Complete_Tutorial.ipynb`](./lab/08_AG2_101_AutoGen_Complete_Tutorial.ipynb).
+
+* The notebook introduces AG2 core concepts through small runnable examples.
+* Dependencies are expected from `requirements.in`; the notebook does not install packages.
+* OpenAI credentials are loaded with `python-dotenv` from `OPENAI_API_KEY` and optional `OPENAI_MODEL`.
+* The notebook uses `LLMConfig` for OpenAI model configuration.
+* It demonstrates:
+  * two-agent conversations with `ConversableAgent`
+  * specialized role agents
+  * `AssistantAgent` and `UserProxyAgent`
+  * non-blocking human-review style workflows
+  * pattern-based group chat with `RoundRobinPattern`
+  * decorator-based tool registration with `register_for_llm()` and `register_for_execution()`
+  * structured outputs with Pydantic and `response_format`
+
+```python
+import json
+import logging
+import os
+import random
+from typing import Annotated
+
+from dotenv import load_dotenv
+from pydantic import BaseModel
+
+from autogen import AssistantAgent, ConversableAgent, LLMConfig, UserProxyAgent
+from autogen.agentchat import run_group_chat
+from autogen.agentchat.group import AgentTarget, TerminateTarget
+from autogen.agentchat.group.patterns import RoundRobinPattern
+
+load_dotenv()
+
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-5-nano")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("Set OPENAI_API_KEY in your environment or .env file.")
+
+llm_config = LLMConfig(
+    {
+        "api_type": "openai",
+        "model": MODEL_NAME,
+        "api_key": OPENAI_API_KEY,
+    }
+)
+
+logging.getLogger("autogen.oai.client").setLevel(logging.ERROR)
+
+# 1. Basic two-agent conversation with summarization.
+student = ConversableAgent(
+    name="student",
+    system_message="You are a curious student. Ask clear, specific questions to learn new concepts.",
+    human_input_mode="NEVER",
+    llm_config=llm_config,
+)
+
+tutor = ConversableAgent(
+    name="tutor",
+    system_message="You are a helpful tutor who gives concise beginner-friendly explanations.",
+    human_input_mode="NEVER",
+    llm_config=llm_config,
+)
+
+chat_result = student.initiate_chat(
+    tutor,
+    message="What is AG2 in one short paragraph?",
+    max_turns=2,
+    summary_method="reflection_with_llm",
+)
+
+# 2. Specialized role agents with different system messages.
+tech_expert = ConversableAgent(
+    name="tech_expert",
+    system_message=(
+        "You are a senior software engineer with expertise in Python, AI, and system design. "
+        "Give technical, practical explanations and mention tradeoffs."
+    ),
+    llm_config=llm_config,
+    human_input_mode="NEVER",
+)
+
+creative_writer = ConversableAgent(
+    name="creative_writer",
+    system_message="You are a creative writer. Explain technical topics using concise analogies.",
+    llm_config=llm_config,
+    human_input_mode="NEVER",
+)
+
+user = ConversableAgent(name="user", llm_config=False, human_input_mode="NEVER")
+
+for agent in [tech_expert, creative_writer]:
+    user.initiate_chat(
+        agent,
+        message="Explain why multi-agent systems need clear roles.",
+        max_turns=2,
+        summary_method="reflection_with_llm",
+    )
+
+# 3. AssistantAgent and UserProxyAgent with generated code execution disabled.
+assistant = AssistantAgent(
+    name="assistant",
+    system_message="You are a helpful assistant who writes and explains Python code clearly.",
+    llm_config=llm_config,
+)
+
+user_proxy = UserProxyAgent(
+    name="user_proxy",
+    human_input_mode="NEVER",
+    max_consecutive_auto_reply=5,
+    code_execution_config=False,
+)
+
+user_proxy.initiate_chat(
+    assistant,
+    message="Write a short Python function that returns the square of a number. Do not execute code.",
+    max_turns=2,
+    summary_method="reflection_with_llm",
+)
+
+# 4. Non-blocking human-review style workflow.
+triage_agent = ConversableAgent(
+    name="bug_triage_agent",
+    system_message=(
+        "You are a bug triage assistant. Classify each bug as low, medium, or high priority. "
+        "Ask for human confirmation in your response, then stop."
+    ),
+    llm_config=llm_config,
+    human_input_mode="NEVER",
+)
+
+reviewer_user = ConversableAgent(name="reviewer", llm_config=False, human_input_mode="NEVER")
+
+bug_report = random.choice(
+    [
+        "The app crashes when users upload a CSV file larger than 20 MB.",
+        "The settings page has a typo in the notification label.",
+        "Users sometimes receive duplicate email receipts after checkout.",
+    ]
+)
+
+reviewer_user.initiate_chat(
+    triage_agent,
+    message=f"Triage this bug report: {bug_report}",
+    max_turns=2,
+    summary_method="reflection_with_llm",
+)
+
+# 5. Pattern-based group chat with explicit after-work handoffs.
+lesson_planner = ConversableAgent(
+    name="planner_agent",
+    system_message="Create a short lesson plan for 4th graders.",
+    description="Makes lesson plans.",
+    llm_config=llm_config,
+    human_input_mode="NEVER",
+)
+
+lesson_reviewer = ConversableAgent(
+    name="reviewer_agent",
+    system_message="Review the plan and suggest up to 3 brief edits.",
+    description="Reviews lesson plans.",
+    llm_config=llm_config,
+    human_input_mode="NEVER",
+)
+
+teacher = ConversableAgent(
+    name="teacher_agent",
+    system_message="Finalize the lesson plan and end the workflow.",
+    description="Finalizes lesson plans.",
+    llm_config=llm_config,
+    human_input_mode="NEVER",
+)
+
+# After lesson_planner finishes its turn, hand the conversation to lesson_reviewer, ...
+lesson_planner.handoffs.set_after_work(AgentTarget(lesson_reviewer))
+lesson_reviewer.handoffs.set_after_work(AgentTarget(teacher))
+teacher.handoffs.set_after_work(TerminateTarget())
+
+result = run_group_chat(
+    pattern=RoundRobinPattern(
+        initial_agent=lesson_planner,
+        agents=[lesson_planner, lesson_reviewer, teacher],
+        group_manager_args={"llm_config": llm_config},
+    ),
+    messages="Create a 15-minute lesson plan about plant life cycles.",
+    max_rounds=6,
+)
+result.process()
+
+# 6. Decorator-based tool registration.
+math_asker = AssistantAgent(
+    name="math_asker",
+    system_message="Use the registered tool to check whether numbers are prime. Explain the result briefly.",
+    llm_config=llm_config,
+)
+
+math_checker = UserProxyAgent(
+    name="math_checker",
+    human_input_mode="NEVER",
+    code_execution_config=False,
+    max_consecutive_auto_reply=3,
+)
+
+@math_checker.register_for_execution()
+@math_asker.register_for_llm(description="Check whether a positive integer is prime.")
+def is_prime(n: Annotated[int, "Positive integer to test"]) -> str:
+    if n < 2:
+        return "No"
+    for i in range(2, int(n**0.5) + 1):
+        if n % i == 0:
+            return "No"
+    return "Yes"
+
+math_checker.initiate_chat(
+    math_asker,
+    message="Is 97 a prime number? Use the tool before answering.",
+    max_turns=3,
+    summary_method="reflection_with_llm",
+)
+
+# 7. Structured output with Pydantic.
+class TicketSummary(BaseModel):
+    customer_name: str
+    issue_type: str
+    urgency_level: str
+    recommended_action: str
+
+structured_llm_config = LLMConfig(
+    {
+        "api_type": "openai",
+        "model": MODEL_NAME,
+        "api_key": OPENAI_API_KEY,
+    },
+    response_format=TicketSummary,
+)
+
+support_agent = ConversableAgent(
+    name="support_agent",
+    system_message="Return only valid JSON that matches the requested support ticket schema.",
+    llm_config=structured_llm_config,
+    human_input_mode="NEVER",
+)
+
+support_user = ConversableAgent(name="support_user", llm_config=False, human_input_mode="NEVER")
+
+structured_result = support_user.initiate_chat(
+    support_agent,
+    message=(
+        "Summarize this ticket: Jordan cannot log in after enabling MFA. "
+        "They are blocked from payroll approval today."
+    ),
+    max_turns=2,
+)
+
+ticket = TicketSummary.model_validate_json(structured_result.chat_history[-1]["content"])
+ticket_data = ticket.model_dump()
+```
+
+
+
+#### Exercise: Build Multi-Agent Chatbot with AG2 (AutoGen) for Healthcare
+
+Notebook: [`lab/09_autogen_health-v1.ipynb`](./lab/09_autogen_health-v1.ipynb).
+
+* The notebook builds a healthcare education chatbot as a controlled multi-agent workflow.
+* Dependencies are expected from `requirements.in`; the notebook does not install packages.
+* OpenAI credentials are loaded with `python-dotenv` from `OPENAI_API_KEY` and optional `OPENAI_MODEL`.
+* The workflow uses `LLMConfig`, `DefaultPattern`, explicit handoffs, and `ContextVariables`.
+* It demonstrates:
+  * a patient/user proxy agent that starts the consultation
+  * a diagnosis-information agent that summarizes symptoms without diagnosing
+  * a pharmacy-education agent that discusses general medication safety
+  * a consultation agent that creates the final patient-friendly summary
+  * explicit routing with `AgentTarget`
+  * safe termination with `TerminateTarget`
+  * healthcare safety flags stored in `ContextVariables`
+
+```python
+import logging
+import os
+import warnings
+
+from dotenv import load_dotenv
+
+from autogen import ConversableAgent, LLMConfig
+from autogen.agentchat import run_group_chat
+from autogen.agentchat.group import AgentTarget, ContextVariables, TerminateTarget
+from autogen.agentchat.group.patterns import DefaultPattern
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+logging.getLogger("autogen.oai.client").setLevel(logging.ERROR)
+
+load_dotenv()
+
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-5-nano")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("Set OPENAI_API_KEY in your environment or .env file.")
+
+llm_config = LLMConfig(
+    {
+        "api_type": "openai",
+        "model": MODEL_NAME,
+        "api_key": OPENAI_API_KEY,
+    }
+)
+
+# Code execution is not required for this workflow.
+code_execution_config = False
+
+# 1. Define the agents. This is healthcare education, not diagnosis or treatment.
+patient_agent = ConversableAgent(
+    name="patient",
+    system_message="You represent the user request and start the consultation.",
+    llm_config=False,
+    human_input_mode="NEVER",
+)
+
+diagnosis_agent = ConversableAgent(
+    name="diagnosis_agent",
+    system_message=(
+        "You are a cautious healthcare information assistant. Summarize symptoms, "
+        "list possible non-diagnostic considerations, identify red flags, and advise seeing a clinician. "
+        "Do not claim to diagnose or prescribe."
+    ),
+    llm_config=llm_config,
+    human_input_mode="NEVER",
+)
+
+pharmacy_agent = ConversableAgent(
+    name="pharmacy_agent",
+    system_message=(
+        "You provide general medication safety education. Mention interactions, allergies, "
+        "contraindications, and the need to consult a licensed professional. Do not prescribe."
+    ),
+    llm_config=llm_config,
+    human_input_mode="NEVER",
+)
+
+consultation_agent = ConversableAgent(
+    name="consultation_agent",
+    system_message=(
+        "You create the final patient-friendly summary with next steps, urgent-care warnings, "
+        "and a reminder that this is not medical advice."
+    ),
+    llm_config=llm_config,
+    human_input_mode="NEVER",
+)
+
+# 2. Store shared safety/workflow state.
+context = ContextVariables(
+    data={
+        "domain": "healthcare_education",
+        "requires_disclaimer": True,
+        "urgent_care_warning": True,
+    }
+)
+
+# 3. Define explicit handoffs for the regulated-domain workflow.
+# After diagnosis_agent finishes its turn, hand the conversation to pharmacy_agent...
+diagnosis_agent.handoffs.set_after_work(AgentTarget(pharmacy_agent))
+pharmacy_agent.handoffs.set_after_work(AgentTarget(consultation_agent))
+consultation_agent.handoffs.set_after_work(TerminateTarget())
+
+# 4. Build the pattern-based group chat.
+healthcare_pattern = DefaultPattern(
+    initial_agent=diagnosis_agent,
+    agents=[diagnosis_agent, pharmacy_agent, consultation_agent],
+    user_agent=patient_agent,
+    context_variables=context,
+    group_manager_args={"llm_config": llm_config},
+)
+
+# 5. Run the consultation with a sample patient message.
+sample_symptoms = "I have had a sore throat, mild fever, and fatigue for two days."
+
+result = run_group_chat(
+    pattern=healthcare_pattern,
+    messages=(
+        f"Patient symptoms: {sample_symptoms}\n"
+        "Provide general health education only, include red flags, and do not diagnose."
+    ),
+    max_rounds=6,
+)
+result.process()
+healthcare_summary = result.summary
+```
+
 
 
 ### Summary and Cheat Sheet: BeeAI and AG2
