@@ -70,6 +70,7 @@ Table of Contents:
       - [Custom Tools](#custom-tools)
       - [Exercise: Building Agentic AI Systems with the BeeAI Framework](#exercise-building-agentic-ai-systems-with-the-beeai-framework)
     - [AG2 (AutoGen) Core Concepts, Architecture and Conversation Patterns](#ag2-autogen-core-concepts-architecture-and-conversation-patterns)
+      - [Extending AG2 with Custom Tools and Structured Outputs](#extending-ag2-with-custom-tools-and-structured-outputs)
     - [Summary and Cheat Sheet: BeeAI and AG2](#summary-and-cheat-sheet-beeai-and-ag2)
   - [4. Extra: Pydantic AI](#4-extra-pydantic-ai)
 
@@ -5033,7 +5034,341 @@ await multi_agent_travel_planner()
 
 ### AG2 (AutoGen) Core Concepts, Architecture and Conversation Patterns
 
+* [AG2](https://github.com/ag2ai/ag2), formerly AutoGen, is a conversation-first framework for building systems where agents, tools, code executors, and humans collaborate through message exchange.
+* The central idea is that the workflow is modeled as a chat rather than as a fixed task list or graph.
+  * Each agent receives messages.
+  * Each agent decides whether to reply, call a tool, execute code, ask for human input, or stop.
+  * The conversation history becomes the shared coordination state.
+* Core AG2 building blocks:
+  * `ConversableAgent` is the generic base agent for message-based collaboration.
+  * `AssistantAgent` is an LLM-backed agent designed to solve tasks, write code, reason, and respond automatically.
+  * `UserProxyAgent` represents the user side of the conversation and can optionally collect human input, execute code, or run registered tools.
+  * `LLMConfig` defines the model provider, model name, API key, and related model settings used by LLM-backed agents.
+  * `GroupChat` stores a multi-agent conversation and controls the list of participants.
+  * `GroupChatManager` coordinates a `GroupChat` by selecting which agent should speak next.
+* Important agent configuration options:
+  * `name` identifies the agent in the conversation.
+  * `system_message` defines the agent's role, behavior, and boundaries.
+  * `description` helps a group chat manager decide when an agent is the right speaker.
+  * `llm_config` enables or disables LLM-backed auto replies.
+  * `human_input_mode` controls whether the agent asks a human on every turn, only at termination, or never.
+  * `code_execution_config` controls whether code blocks can be executed.
+  * `is_termination_msg` defines when a conversation should stop.
+  * `max_consecutive_auto_reply` prevents unbounded back-and-forth loops.
+* Two-agent conversation pattern:
+  * An assistant agent performs the task.
+  * A user proxy agent starts the chat and represents the user.
+  * The agents continue exchanging messages until a termination condition, human stop, or reply limit is reached.
+  * This pattern is useful for coding assistants, tutoring, technical support, and iterative task solving.
+* Human-in-the-loop pattern:
+  * `UserProxyAgent` can ask a human for input during the conversation.
+  * `human_input_mode="ALWAYS"` asks every turn.
+  * `human_input_mode="TERMINATE"` asks when the conversation appears ready to end or when the auto-reply limit is reached.
+  * `human_input_mode="NEVER"` makes the workflow fully automated.
+* Tool and code execution pattern:
+  * Tools can be registered for LLM selection and for execution.
+  * Code execution can be enabled on a proxy/executor agent, but it should be configured carefully because generated code may perform unsafe actions.
+  * In tutorial and notebook examples, it is often clearer to start with `code_execution_config=False` and add execution only when needed.
+* Group chat pattern:
+  * Multiple agents participate in one shared conversation.
+  * `GroupChatManager` decides the next speaker.
+  * Built-in speaker selection strategies include:
+    * `auto`: the manager chooses the next speaker with an LLM.
+    * `round_robin`: agents speak in their configured order.
+    * `random`: the next speaker is selected randomly.
+    * `manual`: a human selects the next speaker.
+    * a callable: custom Python logic selects the next speaker.
+  * Group chats are useful when multiple specialists need to debate, review, or revise the same artifact.
+* Practical design rules:
+  * Use narrow system messages so each agent has one clear responsibility.
+  * Use `description` fields in group chats because speaker selection depends on knowing each agent's purpose.
+  * Set explicit termination conditions and reply limits to avoid runaway conversations.
+  * Keep code execution disabled until the workflow actually requires it.
+  * Prefer two-agent chats for simple assistant/proxy workflows.
+  * Prefer group chats when several specialists need to collaborate through conversation.
+* Compared with the other frameworks in this README:
+  * CrewAI feels like assigning tasks to a role-based team.
+  * LangGraph feels like building an explicit state machine.
+  * BeeAI feels like composing production-oriented agents, tools, memory, and async workflows.
+  * AG2 feels like designing controlled conversations between autonomous participants.
+
+```python
+# Requires: pip install -U "ag2[openai]"
+# OPENAI_API_KEY is read from the environment.
+
+import os
+from dotenv import load_dotenv
+
+from autogen import (
+    AssistantAgent,
+    ConversableAgent,
+    GroupChat,
+    GroupChatManager,
+    LLMConfig,
+    UserProxyAgent,
+)
+
+load_dotenv()
+
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-5-nano")
+llm_config = LLMConfig(
+    config_list=[
+        {
+            "api_type": "openai",
+            "model": MODEL_NAME,
+            "api_key": os.environ["OPENAI_API_KEY"],
+        }
+    ]
+)
+
+
+def is_done(message: dict) -> bool:
+    content = message.get("content", "")
+    return isinstance(content, str) and "TERMINATE" in content
+
+
+# --- 1. Two-agent assistant/proxy conversation
+
+assistant = AssistantAgent(
+    name="technical_assistant",
+    system_message=(
+        "You are a concise technical assistant. Answer the user's request, "
+        "then end with TERMINATE when the task is complete."
+    ),
+    llm_config=llm_config,
+    is_termination_msg=is_done,
+)
+
+user_proxy = UserProxyAgent(
+    name="user_proxy",
+    human_input_mode="NEVER",
+    code_execution_config=False,
+    max_consecutive_auto_reply=4,
+    is_termination_msg=is_done,
+)
+
+user_proxy.initiate_chat(
+    assistant,
+    message="Explain when AG2 group chat is preferable to a two-agent chat.",
+)
+
+
+# --- 2. Group chat with specialist agents
+
+group_user_proxy = UserProxyAgent(
+    name="group_user_proxy",
+    human_input_mode="NEVER",
+    code_execution_config=False,
+    max_consecutive_auto_reply=1,
+    is_termination_msg=is_done,
+)
+
+planner = ConversableAgent(
+    name="planner",
+    system_message=(
+        "You plan the answer structure. Be brief and hand off to the reviewer "
+        "after creating a plan."
+    ),
+    description="Creates a concise answer plan.",
+    llm_config=llm_config,
+)
+
+reviewer = ConversableAgent(
+    name="reviewer",
+    system_message=(
+        "You review the plan for clarity and missing points. Provide one short "
+        "review, then let the writer finalize."
+    ),
+    description="Reviews the plan and suggests improvements.",
+    llm_config=llm_config,
+)
+
+writer = ConversableAgent(
+    name="writer",
+    system_message=(
+        "You write the final answer using the plan and review. End the final "
+        "message with TERMINATE."
+    ),
+    description="Writes the final response.",
+    llm_config=llm_config,
+    is_termination_msg=is_done,
+)
+
+group_chat = GroupChat(
+    agents=[group_user_proxy, planner, reviewer, writer],
+    messages=[],
+    max_round=8,
+    speaker_selection_method="round_robin",
+)
+
+manager = GroupChatManager(
+    groupchat=group_chat,
+    llm_config=llm_config,
+    is_termination_msg=is_done,
+)
+
+group_user_proxy.initiate_chat(
+    manager,
+    message="Create a short checklist for designing safe multi-agent conversations.",
+)
+```
+
+#### Extending AG2 with Custom Tools and Structured Outputs
+
+* AG2 agents can be extended in two common production-oriented ways:
+  * custom tools give agents deterministic actions outside the LLM
+  * structured outputs make final answers easier to validate and consume in downstream code
+* Custom tools are normal Python functions exposed to agents.
+  * The LLM-backed agent receives the tool schema and decides when to call it.
+  * The execution/proxy agent actually runs the Python function.
+  * The current recommended style is decorator-based registration.
+* Tool registration pattern:
+  * Use `@assistant.register_for_llm(...)` to make the tool visible to the model.
+  * Use `@user_proxy.register_for_execution()` to define which agent executes the tool call.
+  * Put `@register_for_llm(...)` closer to the function and `@register_for_execution()` above it.
+  * Use `typing.Annotated` on function parameters so AG2 can build a useful tool schema.
+  * Keep tool functions narrow, deterministic, and explicit about their inputs and outputs.
+* Structured outputs use Pydantic models.
+  * Define the expected shape as a `BaseModel`.
+  * Pass the model through `response_format` in `LLMConfig`.
+  * The model provider is asked to return data matching the schema.
+  * The final message content can then be parsed and validated with Pydantic.
+* Structured outputs are useful when:
+  * a workflow needs stable fields instead of prose
+  * another program will consume the agent response
+  * routing or storage depends on typed values
+  * validation errors should be caught early
+* Practical design rules:
+  * Use tools for actions the model should not improvise, such as calculations, database lookups, API calls, and file operations.
+  * Use structured output for final answers that need to become application data.
+  * Register tools on both sides of the interaction: one agent calls, another executes.
+  * Avoid giving the model broad tools when a small function is enough.
+  * Keep code execution disabled unless the workflow specifically requires generated code execution.
+
+```python
+# Requires: pip install -U "ag2[openai]" python-dotenv pydantic
+# OPENAI_API_KEY is read from the environment.
+
+import json
+import os
+from typing import Annotated
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+from autogen import AssistantAgent, ConversableAgent, LLMConfig, UserProxyAgent
+
+
+load_dotenv()
+
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-5-nano")
+
+
+def is_done(message: dict) -> bool:
+    content = message.get("content", "")
+    return isinstance(content, str) and "TERMINATE" in content
+
+
+# --- 1. Custom tool registration
+
+tool_llm_config = LLMConfig(
+    {
+        "api_type": "openai",
+        "model": MODEL_NAME,
+        "api_key": os.environ["OPENAI_API_KEY"],
+    }
+)
+
+research_assistant = AssistantAgent(
+    name="research_assistant",
+    system_message=(
+        "You answer research questions. Use registered tools when they provide "
+        "more reliable facts or calculations. End with TERMINATE."
+    ),
+    llm_config=tool_llm_config,
+    is_termination_msg=is_done,
+)
+
+tool_executor = UserProxyAgent(
+    name="tool_executor",
+    human_input_mode="NEVER",
+    code_execution_config=False,
+    max_consecutive_auto_reply=4,
+    is_termination_msg=is_done,
+)
+
+
+@tool_executor.register_for_execution()
+@research_assistant.register_for_llm(
+    description="Estimate total cost from a unit price, quantity, and tax rate."
+)
+def estimate_total_cost(
+    unit_price: Annotated[float, "Unit price before tax."],
+    quantity: Annotated[int, "Number of units to buy."],
+    tax_rate: Annotated[float, "Tax rate as a decimal, for example 0.21 for 21%."],
+) -> str:
+    subtotal = unit_price * quantity
+    total = subtotal * (1 + tax_rate)
+    return f"Subtotal: {subtotal:.2f}; total with tax: {total:.2f}"
+
+
+tool_executor.initiate_chat(
+    research_assistant,
+    message=(
+        "A team needs 12 API subscriptions at 19.99 each, with 21% tax. "
+        "Use the cost tool and explain the result briefly."
+    ),
+)
+
+
+# --- 2. Structured output with Pydantic
+
+class RiskBrief(BaseModel):
+    topic: str = Field(description="The topic being analyzed.")
+    summary: str = Field(description="One concise summary sentence.")
+    risks: list[str] = Field(description="Main risks to consider.")
+    mitigations: list[str] = Field(description="Practical mitigation actions.")
+    confidence: float = Field(ge=0, le=1, description="Confidence score from 0 to 1.")
+
+
+structured_llm_config = LLMConfig(
+    {
+        "api_type": "openai",
+        "model": MODEL_NAME,
+        "api_key": os.environ["OPENAI_API_KEY"],
+    },
+    response_format=RiskBrief,
+)
+
+structured_agent = ConversableAgent(
+    name="risk_structurer",
+    system_message=(
+        "You convert risk analysis requests into the requested structured schema. "
+        "Return only valid JSON."
+    ),
+    llm_config=structured_llm_config,
+    human_input_mode="NEVER",
+)
+
+structured_user = ConversableAgent(
+    name="structured_user",
+    llm_config=False,
+    human_input_mode="NEVER",
+)
+
+result = structured_user.initiate_chat(
+    structured_agent,
+    message="Create a risk brief for using AI agents in customer support.",
+    max_turns=2,
+)
+
+raw_content = result.chat_history[-1]["content"]
+brief = RiskBrief.model_validate_json(raw_content)
+
+print(json.dumps(brief.model_dump(), indent=2))
+```
+
+
 ### Summary and Cheat Sheet: BeeAI and AG2
 
 ## 4. Extra: Pydantic AI
-

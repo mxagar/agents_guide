@@ -1,7 +1,8 @@
 accelerate
+ag2[openai]
 anthropic
 autopep8
-beeai-framework[wikipedia]
+beeai-framework
 bitsandbytes
 chromadb
 crewai
@@ -31,9 +32,10 @@ langsmith
 matplotlib
 mcp
 mysql-connector-python
-numpy
+numpy<2.3
 onnx
 onnxruntime
+opencv-python-headless>=4.12.0.88
 openai
 pandas
 peft
