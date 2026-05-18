@@ -5814,8 +5814,622 @@ result.process()
 healthcare_summary = result.summary
 ```
 
-
-
 ### Summary and Cheat Sheet: BeeAI and AG2
 
+#### Framework Fit
+
+* Use **BeeAI** when the application needs production-oriented agent components:
+  * provider-independent model access with `ChatModel`
+  * explicit memory
+  * modular built-in and custom tools
+  * async execution with `async` / `await`
+  * middleware, events, and trajectory observability
+  * workflows with sequential, parallel, handoff, or synthesis-style orchestration
+  * deployable or servable agent interfaces
+* Use **AG2** when the application is best modeled as controlled conversations:
+  * agents exchange messages as the main coordination mechanism
+  * the conversation history becomes shared state
+  * humans, tools, code executors, and LLM-backed agents can participate in one chat
+  * two-agent chats are simple for assistant/proxy workflows
+  * group chats are useful when several specialists debate, review, route, or revise an artifact
+* Compared with the other frameworks in this README:
+  * CrewAI feels like assigning tasks to a role-based team.
+  * LangGraph feels like building an explicit state machine.
+  * BeeAI feels like composing production-oriented agents, tools, memory, async workflows, and observability.
+  * AG2 feels like designing controlled conversations between autonomous participants.
+
+```python
+# Framework intuition
+if workflow_shape == "role-based task team":
+    framework = "CrewAI"
+elif workflow_shape == "explicit state machine":
+    framework = "LangGraph"
+elif workflow_needs in {"async workflows", "explicit memory", "observability", "servable agents"}:
+    framework = "BeeAI"
+elif workflow_shape == "message-driven multi-agent conversation":
+    framework = "AG2"
+```
+
+#### BeeAI Core Components
+
+* BeeAI is an agentic framework for building autonomous agents and multi-agent systems.
+* `ChatModel` abstracts the LLM backend so the same agent code can work with different model providers.
+* Agents combine:
+  * an LLM
+  * role and instructions
+  * memory
+  * tools
+  * optional requirements
+  * optional middleware
+* Tools extend agents with capabilities such as search, weather, code execution, handoffs, and custom domain functions.
+* Memory stores conversation or execution context so agents can use prior messages while solving a task.
+* Workflows orchestrate multiple agents into larger systems:
+  * sequential flows
+  * parallel flows
+  * synthesis-style flows
+  * coordinator/specialist flows
+* Coroutine-based execution means BeeAI agents and workflows run with `async` / `await`.
+* Events and emitters expose intermediate execution details for:
+  * logging
+  * tracing
+  * debugging
+  * observability
+* Serving and adapters can expose agents through APIs or interoperability protocols such as A2A.
+
+```python
+import asyncio
+
+from beeai_framework.agents.requirement import RequirementAgent
+from beeai_framework.backend.chat import ChatModel
+from beeai_framework.memory import UnconstrainedMemory
+
+async def main():
+    llm = ChatModel.from_name("openai:gpt-4o-mini")
+
+    agent = RequirementAgent(
+        llm=llm,
+        role="Research assistant",
+        instructions="Answer clearly and use tools when they improve reliability.",
+        tools=[],
+        memory=UnconstrainedMemory(),
+    )
+
+    response = await agent.run("Explain when BeeAI is a good framework choice.")
+    return response
+
+asyncio.run(main())
+```
+
+#### BeeAI Agents
+
+* Main BeeAI agent types:
+  * `RequirementAgent`: general-purpose, instruction-driven agent with tools, memory, and behavioral requirements.
+  * `ReActAgent`: reason-and-act agent that iterates through thinking, tool use, observation, and final answer generation.
+  * `ToolCallingAgent`: agent optimized for models and workflows that rely on explicit tool calls.
+* A typical BeeAI agent is configured with:
+  * `llm`: model backend, usually created with `ChatModel.from_name(...)`
+  * `role`: the agent's job
+  * `instructions`: behavior, boundaries, and task rules
+  * `tools`: external capabilities
+  * `memory`: conversation or execution state, such as `UnconstrainedMemory`
+  * `requirements`: rules that control tool usage and behavior
+  * `middlewares`: hooks for observability and execution tracking
+* BeeAI agents run as coroutines:
+  * call `await agent.run(...)` inside an async function
+  * use `asyncio.run(main())` at the script boundary
+  * combine naturally with async workflows, APIs, streaming, and concurrent execution
+
+```python
+from beeai_framework.agents.requirement import RequirementAgent
+from beeai_framework.agents.requirement.requirements.conditional import ConditionalRequirement
+from beeai_framework.backend.chat import ChatModel
+from beeai_framework.memory import UnconstrainedMemory
+from beeai_framework.tools.think import ThinkTool
+
+llm = ChatModel.from_name("openai:gpt-4o-mini")
+
+agent = RequirementAgent(
+    llm=llm,
+    role="Planning assistant",
+    instructions="Think first, then produce a concise answer.",
+    tools=[ThinkTool()],
+    memory=UnconstrainedMemory(),
+    requirements=[
+        ConditionalRequirement(ThinkTool, force_at_step=1, consecutive_allowed=False),
+    ],
+)
+```
+
+#### BeeAI Requirements, Tools, and Observability
+
+* Requirements add production control over agent behavior:
+  * `ConditionalRequirement` can force a tool at a step.
+  * It can limit tool usage.
+  * It can prevent consecutive calls.
+  * It can require one tool after another.
+  * `AskPermissionRequirement` adds human approval before sensitive tool calls.
+* Requirements are useful for:
+  * predictable workflows
+  * compliance
+  * cost control
+  * safer tool use
+* Built-in tools include:
+  * `ThinkTool`
+  * `WikipediaTool`
+  * `OpenMeteoTool`
+  * search tools
+* `ThinkTool` plus `ConditionalRequirement` creates a controlled ReAct-style think -> act -> observe loop.
+* Middleware and events make execution observable:
+  * `GlobalTrajectoryMiddleware` records tool usage and execution flow.
+  * `.on(...)` event handlers can inspect starts, successes, model responses, and nested execution events.
+
+```python
+from beeai_framework.agents.requirement import RequirementAgent
+from beeai_framework.agents.requirement.requirements.conditional import ConditionalRequirement
+from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
+from beeai_framework.tools.think import ThinkTool
+
+agent = RequirementAgent(
+    llm=llm,
+    role="Controlled ReAct assistant",
+    instructions="Use the think tool before answering.",
+    tools=[ThinkTool()],
+    memory=UnconstrainedMemory(),
+    requirements=[
+        ConditionalRequirement(ThinkTool, force_at_step=1, consecutive_allowed=False),
+    ],
+    middlewares=[GlobalTrajectoryMiddleware()],
+)
+
+agent.on("success", lambda event: print("Agent finished successfully."))
+```
+
+#### BeeAI Custom Tools
+
+* Use custom tools when an agent needs domain-specific actions not built into BeeAI.
+* A custom tool usually has:
+  * a Pydantic input schema
+  * a `Tool` subclass
+  * a `name`
+  * a `description`
+  * an async `_run(...)` method
+  * a tool output type such as `StringToolOutput`
+* Add the custom tool to an agent with `tools=[...]`.
+
+```python
+from pydantic import BaseModel, Field
+
+from beeai_framework.context import RunContext
+from beeai_framework.emitter import Emitter
+from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
+
+class CalculatorInput(BaseModel):
+    expression: str = Field(description="Arithmetic expression to evaluate.")
+
+class CalculatorTool(Tool[CalculatorInput, ToolRunOptions, StringToolOutput]):
+    name = "calculator"
+    description = "Evaluate a simple arithmetic expression."
+    input_schema = CalculatorInput
+
+    async def _run(
+        self,
+        input: CalculatorInput,
+        options: ToolRunOptions,
+        context: RunContext,
+        emitter: Emitter,
+    ) -> StringToolOutput:
+        result = eval(input.expression, {"__builtins__": {}}, {})
+        return StringToolOutput(str(result))
+
+agent = RequirementAgent(
+    llm=llm,
+    role="Math assistant",
+    instructions="Use the calculator for arithmetic.",
+    tools=[CalculatorTool()],
+    memory=UnconstrainedMemory(),
+)
+```
+
+#### BeeAI Multi-Agent Composition
+
+* Multi-agent behavior is built by composing agents:
+  * specialist agents handle focused tasks.
+  * coordinator agents delegate work.
+  * `HandoffTool` lets one agent hand a task to another agent.
+  * workflows can orchestrate agents sequentially, in parallel, or through synthesis.
+* A common BeeAI pattern:
+  * create one shared `ChatModel`
+  * define specialist agents with narrow instructions
+  * give each specialist memory
+  * wrap specialists as handoff tools
+  * create a coordinator agent that delegates to the specialists
+  * run the coordinator with `await`
+
+```python
+from beeai_framework.tools.handoff import HandoffTool
+
+weather_agent = RequirementAgent(
+    llm=llm,
+    role="Weather specialist",
+    instructions="Answer weather-related travel questions.",
+    tools=[],
+    memory=UnconstrainedMemory(),
+)
+
+planner_agent = RequirementAgent(
+    llm=llm,
+    role="Travel planner",
+    instructions="Create practical itineraries.",
+    tools=[],
+    memory=UnconstrainedMemory(),
+)
+
+coordinator = RequirementAgent(
+    llm=llm,
+    role="Travel coordinator",
+    instructions="Delegate to specialists, then synthesize the final travel plan.",
+    tools=[
+        HandoffTool(agent=weather_agent, name="weather_specialist"),
+        HandoffTool(agent=planner_agent, name="planner_specialist"),
+    ],
+    memory=UnconstrainedMemory(),
+)
+```
+
+#### BeeAI Exercise Coverage
+
+* The BeeAI notebook uses OpenAI models through `ChatModel`.
+* It uses top-level `await` because BeeAI agents, tools, and model calls are coroutine-based.
+* It covers:
+  * basic chat with `ChatModel`
+  * reusable prompt templates
+  * structured output with Pydantic
+  * minimal `RequirementAgent` usage
+  * a Tavily-backed custom search tool
+  * controlled ReAct-style reasoning with `ThinkTool` and `ConditionalRequirement`
+  * a custom calculator tool
+  * multi-agent travel planning with `HandoffTool`
+* Required environment variables:
+  * `OPENAI_API_KEY` for model-backed cells
+  * `TAVILY_API_KEY` for live Tavily web search cells
+  * optional `OPENAI_MODEL`, defaulting to `openai:gpt-4o-mini`
+
+```python
+import os
+from dotenv import load_dotenv
+from beeai_framework.backend.chat import ChatModel
+
+load_dotenv()
+
+llm = ChatModel.from_name(os.getenv("OPENAI_MODEL", "openai:gpt-4o-mini"))
+openai_key = os.environ["OPENAI_API_KEY"]
+tavily_key = os.getenv("TAVILY_API_KEY")
+```
+
+#### AG2 Core Components
+
+* AG2, formerly AutoGen, is a conversation-first framework for systems where agents, tools, code executors, and humans collaborate through message exchange.
+* The workflow is modeled as a chat rather than as a fixed task list or graph.
+* In AG2:
+  * each agent receives messages
+  * each agent decides whether to reply, call a tool, execute code, ask for human input, or stop
+  * the conversation history becomes the shared coordination state
+* Core AG2 building blocks:
+  * `ConversableAgent`: generic base agent for message-based collaboration
+  * `AssistantAgent`: LLM-backed agent for solving tasks, writing code, reasoning, and replying automatically
+  * `UserProxyAgent`: user-side agent that can collect human input, execute code, or run registered tools
+  * `LLMConfig`: model provider, model name, API key, and related settings
+  * `GroupChat`: stores a multi-agent conversation and participant list
+  * `GroupChatManager`: coordinates a `GroupChat` by selecting the next speaker
+* Important agent configuration options:
+  * `name`: identifies the agent
+  * `system_message`: defines role, behavior, and boundaries
+  * `description`: helps a group manager choose the right speaker
+  * `llm_config`: enables or disables LLM-backed auto replies
+  * `human_input_mode`: controls human input behavior
+  * `code_execution_config`: controls whether code blocks can be executed
+  * `is_termination_msg`: defines when the conversation should stop
+  * `max_consecutive_auto_reply`: prevents unbounded back-and-forth loops
+
+```python
+import os
+from dotenv import load_dotenv
+from autogen import AssistantAgent, ConversableAgent, LLMConfig, UserProxyAgent
+
+load_dotenv()
+
+llm_config = LLMConfig(
+    {
+        "api_type": "openai",
+        "model": os.getenv("OPENAI_MODEL", "gpt-5-nano"),
+        "api_key": os.environ["OPENAI_API_KEY"],
+    }
+)
+
+assistant = AssistantAgent(
+    name="assistant",
+    system_message="Answer concisely and stop when the task is complete.",
+    llm_config=llm_config,
+)
+
+user_proxy = UserProxyAgent(
+    name="user_proxy",
+    human_input_mode="NEVER",
+    code_execution_config=False,
+    max_consecutive_auto_reply=4,
+)
+```
+
+#### AG2 Conversation Patterns
+
+* Two-agent conversation pattern:
+  * an assistant performs the task
+  * a user proxy starts the chat
+  * agents exchange messages until termination, human stop, or reply limit
+  * useful for coding assistants, tutoring, support, and iterative task solving
+* Human-in-the-loop pattern:
+  * `human_input_mode="ALWAYS"` asks every turn
+  * `human_input_mode="TERMINATE"` asks when the conversation is ready to end or when the auto-reply limit is reached
+  * `human_input_mode="NEVER"` makes the workflow fully automated
+* Code execution pattern:
+  * generated code execution can be enabled on a proxy/executor agent
+  * keep `code_execution_config=False` until code execution is actually required
+  * generated code may perform unsafe actions, so configure execution carefully
+
+```python
+def is_done(message: dict) -> bool:
+    content = message.get("content", "")
+    return isinstance(content, str) and "TERMINATE" in content
+
+assistant = AssistantAgent(
+    name="technical_assistant",
+    system_message="Answer the request, then end with TERMINATE.",
+    llm_config=llm_config,
+    is_termination_msg=is_done,
+)
+
+user_proxy = UserProxyAgent(
+    name="user_proxy",
+    human_input_mode="NEVER",
+    code_execution_config=False,
+    max_consecutive_auto_reply=4,
+    is_termination_msg=is_done,
+)
+
+user_proxy.initiate_chat(
+    assistant,
+    message="Explain when a two-agent AG2 chat is enough.",
+    max_turns=2,
+    summary_method="reflection_with_llm",
+)
+```
+
+#### AG2 Group Chat and Orchestration
+
+* Group chat pattern:
+  * multiple agents participate in one shared conversation
+  * `GroupChatManager` can choose the next speaker in the classic API
+  * pattern-based group chat can use `DefaultPattern`, `AutoPattern`, `RoundRobinPattern`, `RandomPattern`, or `ManualPattern`
+  * group chats are useful when multiple specialists debate, review, route, or revise the same artifact
+* Built-in speaker selection strategies and patterns:
+  * `auto` / `AutoPattern`: an LLM chooses the next speaker from context
+  * `round_robin` / `RoundRobinPattern`: agents speak in a fixed order
+  * `random` / `RandomPattern`: the next speaker is selected randomly
+  * `manual` / `ManualPattern`: a human selects the next speaker
+  * callable / `DefaultPattern` with handoffs: custom or explicit transition logic
+* Sequential chat pattern:
+  * chains multiple two-agent chats in a fixed order
+  * uses `initiate_chats()`
+  * passes earlier results forward as `carryover`
+  * useful for staged workflows such as ideation, drafting, and formatting
+* Nested chat pattern:
+  * encapsulates a multi-agent workflow behind one trigger agent
+  * uses `register_nested_chats()`
+  * the nested workflow can contain sequential chats or group chats
+  * useful when a reusable sub-workflow should appear as one step in a larger conversation
+* Conversation summarization:
+  * `initiate_chat()` can include summarization settings
+  * summaries can use strategies such as LLM-based reflection
+  * sequential chats can pass summaries into later steps
+
+```python
+from autogen.agentchat import run_group_chat
+from autogen.agentchat.group import AgentTarget, TerminateTarget
+from autogen.agentchat.group.patterns import DefaultPattern, RoundRobinPattern
+
+planner = ConversableAgent(name="planner", llm_config=llm_config, human_input_mode="NEVER")
+reviewer = ConversableAgent(name="reviewer", llm_config=llm_config, human_input_mode="NEVER")
+writer = ConversableAgent(name="writer", llm_config=llm_config, human_input_mode="NEVER")
+
+planner.handoffs.set_after_work(AgentTarget(reviewer))
+reviewer.handoffs.set_after_work(AgentTarget(writer))
+writer.handoffs.set_after_work(TerminateTarget())
+
+result = run_group_chat(
+    pattern=DefaultPattern(
+        initial_agent=planner,
+        agents=[planner, reviewer, writer],
+        group_manager_args={"llm_config": llm_config},
+    ),
+    messages="Plan, review, and write a short answer.",
+    max_rounds=6,
+)
+result.process()
+```
+
+#### AG2 Tools and Structured Outputs
+
+* AG2 agents can be extended in two common production-oriented ways:
+  * custom tools give agents deterministic actions outside the LLM
+  * structured outputs make final answers easier to validate and consume downstream
+* Custom tools are normal Python functions exposed to agents.
+* Tool registration pattern:
+  * use `@assistant.register_for_llm(...)` to make the tool visible to the model
+  * use `@user_proxy.register_for_execution()` to define which agent executes the tool call
+  * put `@register_for_llm(...)` closer to the function and `@register_for_execution()` above it
+  * use `typing.Annotated` on parameters so AG2 can build a useful tool schema
+  * keep tool functions narrow, deterministic, and explicit
+* Structured outputs:
+  * define the expected shape as a Pydantic `BaseModel`
+  * pass the model through `response_format` in `LLMConfig`
+  * ask the model provider to return data matching the schema
+  * parse and validate the final message with Pydantic
+* Structured outputs are useful when:
+  * a workflow needs stable fields instead of prose
+  * another program will consume the agent response
+  * routing or storage depends on typed values
+  * validation errors should be caught early
+
+```python
+import json
+from typing import Annotated
+from pydantic import BaseModel, Field
+
+math_asker = AssistantAgent(
+    name="math_asker",
+    system_message="Use the registered tool when arithmetic is required.",
+    llm_config=llm_config,
+)
+
+math_checker = UserProxyAgent(
+    name="math_checker",
+    human_input_mode="NEVER",
+    code_execution_config=False,
+)
+
+@math_checker.register_for_execution()
+@math_asker.register_for_llm(description="Estimate total cost from price, quantity, and tax.")
+def estimate_total_cost(
+    unit_price: Annotated[float, "Unit price before tax."],
+    quantity: Annotated[int, "Number of units."],
+    tax_rate: Annotated[float, "Tax rate as a decimal."],
+) -> str:
+    subtotal = unit_price * quantity
+    total = subtotal * (1 + tax_rate)
+    return f"Subtotal: {subtotal:.2f}; total with tax: {total:.2f}"
+
+class RiskBrief(BaseModel):
+    topic: str = Field(description="The topic being analyzed.")
+    summary: str = Field(description="One concise summary sentence.")
+    risks: list[str] = Field(description="Main risks to consider.")
+    mitigations: list[str] = Field(description="Practical mitigation actions.")
+    confidence: float = Field(ge=0, le=1, description="Confidence score from 0 to 1.")
+
+structured_llm_config = LLMConfig(
+    {
+        "api_type": "openai",
+        "model": os.getenv("OPENAI_MODEL", "gpt-5-nano"),
+        "api_key": os.environ["OPENAI_API_KEY"],
+    },
+    response_format=RiskBrief,
+)
+
+structured_agent = ConversableAgent(
+    name="risk_structurer",
+    system_message="Return only valid JSON matching the requested schema.",
+    llm_config=structured_llm_config,
+    human_input_mode="NEVER",
+)
+```
+
+#### AG2 Routing, Context, Guardrails, and Termination
+
+* Tool-driven routing:
+  * tools can return `ReplyResult`
+  * `ReplyResult` can include a response message, transition target, and context updates
+  * tool calls can influence which agent speaks next
+* Context variables:
+  * `ContextVariables` provides shared key-value state for group workflows
+  * context variables persist across tool calls and interactions
+  * they are not automatically injected into LLM prompts unless explicitly referenced
+  * useful for routing based on workflow state such as severity or escalation level
+* Handoffs and routing:
+  * `OnCondition` supports LLM-based routing from message content
+  * `OnContextCondition` supports routing from `context_variables`
+  * after-work or default routing defines fallback behavior
+  * tools can route by returning a `ReplyResult` transition
+* Guardrails:
+  * guardrails can intercept agent inputs or outputs
+  * `RegexGuardrail` detects pattern-based issues such as sensitive identifiers
+  * `LLMGuardrail` applies semantic safety checks
+  * guardrails can redirect control to a safety or compliance agent
+* Termination mechanisms:
+  * `max_turns` stops two-agent chats
+  * `max_round` / `max_rounds` stops group chats
+  * `is_termination_msg` can stop on content such as `DONE` or `TERMINATE`
+  * `max_consecutive_auto_reply` avoids infinite loops
+  * human input such as `exit` can stop chats when human input is enabled
+  * a pattern returning `None` can halt the conversation
+  * `TerminateTarget` ends routing when no further handoff is possible
+  * custom reply logic can return `(True, None)` to intentionally end a chat
+
+```python
+from autogen.agentchat.group import (
+    AgentTarget,
+    ContextVariables,
+    OnCondition,
+    OnContextCondition,
+    StringLLMCondition,
+    TerminateTarget,
+)
+
+context = ContextVariables(
+    data={
+        "issue_severity": "normal",
+        "requires_escalation": False,
+    }
+)
+
+triage = ConversableAgent(name="triage", llm_config=llm_config, human_input_mode="NEVER")
+support = ConversableAgent(name="support", llm_config=llm_config, human_input_mode="NEVER")
+escalation = ConversableAgent(name="escalation", llm_config=llm_config, human_input_mode="NEVER")
+
+triage.handoffs.add_llm_conditions(
+    [
+        OnCondition(
+            target=AgentTarget(escalation),
+            condition=StringLLMCondition(prompt="The user reports an urgent outage."),
+        ),
+        OnCondition(
+            target=AgentTarget(support),
+            condition=StringLLMCondition(prompt="The user has a normal support request."),
+        ),
+    ]
+)
+
+support.handoffs.set_after_work(TerminateTarget())
+escalation.handoffs.set_after_work(TerminateTarget())
+```
+
+#### AG2 Exercise Coverage
+
+* AG2 101 notebook:
+  * dependencies come from `requirements.in`
+  * OpenAI credentials are loaded with `python-dotenv`
+  * `LLMConfig` configures OpenAI models
+  * covers two-agent chats, specialized role agents, `AssistantAgent`, `UserProxyAgent`, non-blocking human-review style workflows, pattern-based group chat, tool registration, and structured output
+* Healthcare AG2 notebook:
+  * builds a healthcare education chatbot as a controlled multi-agent workflow
+  * uses `DefaultPattern`, explicit handoffs, and `ContextVariables`
+  * defines a patient/user proxy agent, diagnosis-information agent, pharmacy-education agent, and consultation agent
+  * routes with `AgentTarget`
+  * ends safely with `TerminateTarget`
+  * stores healthcare safety flags in shared context
+  * keeps generated code execution disabled
+
+```python
+# Healthcare orchestration shape
+patient_agent = "starts the consultation"
+diagnosis_agent = "summarizes symptoms without diagnosing"
+pharmacy_agent = "provides general medication safety education"
+consultation_agent = "creates the final patient-friendly summary"
+
+workflow = [
+    patient_agent,
+    diagnosis_agent,
+    pharmacy_agent,
+    consultation_agent,
+    "TerminateTarget",
+]
+```
 ## 4. Extra: Pydantic AI
