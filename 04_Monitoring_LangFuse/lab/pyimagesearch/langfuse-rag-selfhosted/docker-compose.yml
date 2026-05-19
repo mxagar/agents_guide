@@ -1,0 +1,191 @@
+version: "3.8"
+
+services:
+  # ===========================================================================
+  # Langfuse Self-Hosted Server
+  # ===========================================================================
+  langfuse-server:
+    image: langfuse/langfuse:2
+    container_name: langfuse-rag-server
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      # Database Connection
+      DATABASE_URL: postgresql://langfuse:langfuse_password@langfuse-postgres:5432/langfuse
+      
+      # Server Configuration
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: "your-secret-key-change-in-production-min-32-chars-required"
+      
+      # Salt for API key hashing (change in production)
+      SALT: "your-salt-key-change-in-production"
+      
+      # Telemetry (set to 'false' to disable)
+      TELEMETRY_ENABLED: "true"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/public/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - langfuse-rag-network
+
+  # ===========================================================================
+  # Langfuse Worker (CRITICAL for Dashboard Metrics)
+  # ===========================================================================
+  langfuse-worker:
+    image: langfuse/langfuse-worker:2
+    container_name: langfuse-rag-worker
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+    environment:
+      # Database Connection
+      DATABASE_URL: postgresql://langfuse:langfuse_password@langfuse-postgres:5432/langfuse
+      
+      # Server Configuration
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: "your-secret-key-change-in-production-min-32-chars-required"
+      
+      # Salt for API key hashing (must match server)
+      SALT: "your-salt-key-change-in-production"
+    restart: unless-stopped
+    networks:
+      - langfuse-rag-network
+
+  # ===========================================================================
+  # PostgreSQL Database for Langfuse
+  # ===========================================================================
+  langfuse-postgres:
+    image: postgres:15-alpine
+    container_name: langfuse-rag-postgres
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse_password
+      POSTGRES_DB: langfuse
+    ports:
+      - "5433:5432"
+    volumes:
+      - langfuse-rag-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - langfuse-rag-network
+
+  # ===========================================================================
+  # vLLM Server with GPU (Recommended)
+  # ===========================================================================
+  vllm-gpu:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-rag-server
+    profiles: ["gpu"]
+    network_mode: host
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      http_proxy: ${http_proxy:-}
+      https_proxy: ${https_proxy:-}
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    command: >
+      --model meta-llama/Llama-2-7b-chat-hf
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 2048
+      --gpu-memory-utilization 0.75
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ===========================================================================
+  # vLLM Server with CPU (Fallback)
+  # ===========================================================================
+  vllm-cpu:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-rag-server-cpu
+    profiles: ["cpu"]
+    network_mode: host
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      VLLM_CPU_ONLY: "1"
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      http_proxy: ${http_proxy:-}
+      https_proxy: ${https_proxy:-}
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    command: >
+      --model meta-llama/Llama-2-7b-chat-hf
+      --host 0.0.0.0
+      --port 8000
+      --enforce-eager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  langfuse-rag-postgres-data:
+    driver: local
+
+networks:
+  langfuse-rag-network:
+    driver: bridge
+
+# =============================================================================
+# USAGE INSTRUCTIONS
+# =============================================================================
+#
+# Start All Services (Langfuse + PostgreSQL + vLLM with GPU):
+#   docker-compose --profile gpu up -d
+#
+# Start without GPU (CPU mode):
+#   docker-compose --profile cpu up -d
+#
+# Start only Langfuse (no vLLM):
+#   docker-compose up -d
+#
+# Check status:
+#   docker-compose ps
+#
+# View logs:
+#   docker-compose logs -f langfuse-server
+#   docker-compose logs -f vllm-gpu
+#
+# Stop all:
+#   docker-compose --profile gpu down
+#
+# Access Langfuse UI: http://localhost:3000
+# Access vLLM API: http://localhost:8000/v1
+#
+# =============================================================================

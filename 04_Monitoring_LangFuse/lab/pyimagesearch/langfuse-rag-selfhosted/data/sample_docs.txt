@@ -1,0 +1,39 @@
+Machine learning is a branch of artificial intelligence that enables computers to learn from data without being explicitly programmed. It uses statistical techniques to give computer systems the ability to progressively improve performance on a specific task.
+
+Deep learning is a subset of machine learning that uses artificial neural networks with multiple layers. These deep neural networks can automatically learn hierarchical representations of data, making them particularly effective for complex tasks like image recognition and natural language processing.
+
+Supervised learning is a machine learning paradigm where the model is trained on labeled data. The algorithm learns to map inputs to outputs based on example input-output pairs. Common applications include classification tasks (e.g., spam detection) and regression tasks (e.g., price prediction).
+
+Unsupervised learning involves training models on unlabeled data to discover hidden patterns or structures. Clustering algorithms group similar data points together, while dimensionality reduction techniques help visualize high-dimensional data. These methods are useful for exploratory data analysis.
+
+Reinforcement learning is a type of machine learning where an agent learns to make decisions by interacting with an environment. The agent receives rewards or penalties for its actions and learns to maximize cumulative reward over time. This approach is used in robotics, game playing, and autonomous systems.
+
+Natural language processing (NLP) is a field of AI that focuses on enabling computers to understand, interpret, and generate human language. Modern NLP systems use deep learning models like transformers to perform tasks such as translation, summarization, and question answering.
+
+Computer vision is the field of AI that trains computers to interpret and understand visual information from the world. Deep learning has revolutionized computer vision, enabling applications like facial recognition, object detection, autonomous vehicles, and medical image analysis.
+
+Transfer learning is a machine learning technique where a model developed for one task is reused as the starting point for a model on a second task. This approach is particularly useful when you have limited data for your target task, as you can leverage knowledge learned from related tasks with abundant data.
+
+Neural networks are computing systems inspired by biological neural networks. They consist of interconnected nodes (neurons) organized in layers. Information flows from input layer through hidden layers to output layer, with each connection having an associated weight that is adjusted during training.
+
+Convolutional neural networks (CNNs) are specialized neural networks designed for processing grid-like data such as images. They use convolutional layers that apply filters to detect features like edges, textures, and patterns. CNNs have become the standard architecture for computer vision tasks.
+
+Recurrent neural networks (RNNs) are neural networks designed to work with sequential data. They have connections that form cycles, allowing information to persist and be used in future predictions. RNNs are commonly used for time series analysis, natural language processing, and speech recognition.
+
+Transformers are a type of neural network architecture that uses self-attention mechanisms to process sequential data. Introduced in 2017, transformers have become the foundation for large language models like GPT and BERT, revolutionizing natural language processing tasks.
+
+Generative AI refers to artificial intelligence systems that can create new content, including text, images, code, and more. Large language models like GPT-4 and image generation models like DALL-E and Stable Diffusion are examples of generative AI that have gained widespread attention.
+
+Model training is the process of teaching a machine learning model to make predictions by showing it examples. During training, the model adjusts its parameters to minimize the difference between its predictions and the actual outcomes. This typically involves optimization algorithms like gradient descent.
+
+Model evaluation involves assessing how well a trained model performs on new, unseen data. Common evaluation metrics include accuracy, precision, recall, F1 score for classification tasks, and mean squared error for regression tasks. Cross-validation is often used to get robust performance estimates.
+
+Overfitting occurs when a machine learning model learns the training data too well, including noise and outliers, resulting in poor performance on new data. Techniques to prevent overfitting include regularization, dropout, early stopping, and using more training data.
+
+Feature engineering is the process of selecting, modifying, or creating new features (input variables) to improve model performance. Good feature engineering can significantly boost model accuracy by providing the algorithm with more relevant and informative inputs.
+
+Hyperparameter tuning is the process of finding the optimal settings for a machine learning model's hyperparameters. Unlike model parameters that are learned during training, hyperparameters are set before training begins. Techniques include grid search, random search, and Bayesian optimization.
+
+Data preprocessing involves cleaning and transforming raw data into a format suitable for machine learning. Common steps include handling missing values, normalizing or standardizing features, encoding categorical variables, and removing outliers. Quality preprocessing is crucial for model performance.
+
+Ensemble methods combine multiple machine learning models to create a more powerful predictor. Techniques like bagging (Random Forests), boosting (XGBoost, LightGBM), and stacking leverage the strengths of different models to improve overall prediction accuracy and robustness.

@@ -1,0 +1,20 @@
+# LangFuse Configuration
+
+# LLM Settings (vLLM Default)
+llm:
+  base_url: "http://localhost:8000/v1"
+  model: "meta-llama/Llama-2-7b-chat-hf"
+  temperature: 0.7
+  max_tokens: 300
+
+# LangFuse Settings (Self-Hosted)
+langfuse:
+  host: "http://localhost:3000"
+  project_name: "llm-observability-selfhosted"
+
+# Evaluation Settings
+evaluation:
+  enable_scoring: true
+  max_latency_ms: 5000
+  min_length: 20
+  good_length_threshold: 100

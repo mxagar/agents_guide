@@ -1,0 +1,32 @@
+# LangFuse RAG Self-Hosted Configuration
+
+# LangFuse settings
+langfuse:
+  host: "http://localhost:3000"
+  project_name: "rag-selfhosted"
+
+# LLM settings (vLLM)
+llm:
+  base_url: "http://localhost:8000/v1"
+  model: "meta-llama/Llama-2-7b-chat-hf"
+  temperature: 0.7
+  max_tokens: 300
+  max_retries: 2
+
+# Embeddings (local model)
+embeddings:
+  model: "sentence-transformers/all-MiniLM-L6-v2"
+  dimension: 384
+
+# RAG settings
+rag:
+  top_k: 3
+
+# Agent settings
+agent:
+  max_steps: 3
+
+# Evaluation
+evaluation:
+  enable_scoring: true
+  min_quality_score: 0.6
