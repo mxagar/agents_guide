@@ -41,6 +41,7 @@ pandas
 peft
 pip
 pydantic
+pydantic-ai
 pydantic-settings
 pypdf
 pytest

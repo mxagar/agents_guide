@@ -76,6 +76,19 @@ Table of Contents:
       - [Exercise: AG2 (AutoGen) 101](#exercise-ag2-autogen-101)
       - [Exercise: Build Multi-Agent Chatbot with AG2 (AutoGen) for Healthcare](#exercise-build-multi-agent-chatbot-with-ag2-autogen-for-healthcare)
     - [Summary and Cheat Sheet: BeeAI and AG2](#summary-and-cheat-sheet-beeai-and-ag2)
+      - [Framework Fit](#framework-fit)
+      - [BeeAI Core Components](#beeai-core-components-1)
+      - [BeeAI Agents](#beeai-agents-1)
+      - [BeeAI Requirements, Tools, and Observability](#beeai-requirements-tools-and-observability)
+      - [BeeAI Custom Tools](#beeai-custom-tools)
+      - [BeeAI Multi-Agent Composition](#beeai-multi-agent-composition)
+      - [BeeAI Exercise Coverage](#beeai-exercise-coverage)
+      - [AG2 Core Components](#ag2-core-components)
+      - [AG2 Conversation Patterns](#ag2-conversation-patterns)
+      - [AG2 Group Chat and Orchestration](#ag2-group-chat-and-orchestration)
+      - [AG2 Tools and Structured Outputs](#ag2-tools-and-structured-outputs)
+      - [AG2 Routing, Context, Guardrails, and Termination](#ag2-routing-context-guardrails-and-termination)
+      - [AG2 Exercise Coverage](#ag2-exercise-coverage)
   - [4. Extra: Pydantic AI](#4-extra-pydantic-ai)
 
 
@@ -6432,4 +6445,449 @@ workflow = [
     "TerminateTarget",
 ]
 ```
+
 ## 4. Extra: Pydantic AI
+
+* [Pydantic AI](https://pydantic.dev/docs/ai/overview/) is an agent framework from the Pydantic team for building type-safe, production-oriented GenAI applications.
+* It brings a FastAPI-like developer experience to agent development:
+  * define an `Agent`
+  * give it instructions or system prompts
+  * optionally inject typed dependencies with `deps_type`
+  * register tools with decorators
+  * request validated outputs with `output_type`
+  * run the agent synchronously with `run_sync(...)` or asynchronously with `run(...)`
+* Pydantic AI is model-provider agnostic, but the examples here use OpenAI models loaded from environment variables with `python-dotenv`.
+* Required dependencies:
+  * `pydantic-ai`
+  * `pydantic`
+  * `python-dotenv`
+  * `openai`
+* Required environment variables:
+  * `OPENAI_API_KEY`
+  * optional `OPENAI_MODEL`, defaulting to `openai:gpt-5-nano`
+
+#### Setup Pattern
+
+* Use `load_dotenv()` so local notebooks and scripts can read a repository-level `.env` file.
+* Pydantic AI model names include the provider prefix, such as `openai:gpt-5-nano`.
+* The helper below accepts either `gpt-5-nano` or `openai:gpt-5-nano`.
+
+```python
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+def openai_model_name() -> str:
+    model_name = os.getenv("OPENAI_MODEL", "openai:gpt-5-nano")
+    if not model_name.startswith("openai:"):
+        model_name = f"openai:{model_name}"
+    return model_name
+
+OPENAI_MODEL = openai_model_name()
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+```
+
+#### Agent Generation
+
+* An `Agent` wraps:
+  * the model
+  * static instructions
+  * optional dependency type
+  * optional structured output type
+  * optional tools
+* `run_sync(...)` is convenient for scripts, notebooks, and simple demos.
+* `result.output` contains the final model output.
+* Dynamic system prompts can use `RunContext` and runtime dependencies.
+
+```python
+from dataclasses import dataclass
+from datetime import date
+
+from pydantic_ai import Agent, RunContext
+
+@dataclass
+class LearnerProfile:
+    name: str
+    level: str
+    goal: str
+
+coach_agent = Agent(
+    OPENAI_MODEL,
+    deps_type=LearnerProfile,
+    instructions="You are a concise AI learning coach. Give practical, beginner-safe guidance.",
+)
+
+@coach_agent.system_prompt
+def add_learner_context(ctx: RunContext[LearnerProfile]) -> str:
+    return (
+        f"The learner is {ctx.deps.name}. "
+        f"Level: {ctx.deps.level}. Goal: {ctx.deps.goal}. "
+        f"Today's date is {date.today()}."
+    )
+
+profile = LearnerProfile(
+    name="Mira",
+    level="beginner",
+    goal="understand when to use agent frameworks",
+)
+
+coach_result = coach_agent.run_sync(
+    "Create a three-step study path for this week.",
+    deps=profile,
+)
+```
+
+#### Tools
+
+* Tools let the model call deterministic Python functions.
+* Use `@agent.tool_plain` when the tool does not need runtime context.
+* Use `@agent.tool` when the tool needs `RunContext`, dependencies, or injected state.
+* Function arguments become the tool schema passed to the model.
+* Tool docstrings help the model decide when and how to call each tool.
+
+```python
+from dataclasses import dataclass
+from pydantic_ai import Agent, RunContext
+
+@dataclass
+class CourseCatalog:
+    topics: dict[str, str]
+
+tool_agent = Agent(
+    OPENAI_MODEL,
+    deps_type=CourseCatalog,
+    instructions=(
+        "You recommend course topics. Use tools when a catalog lookup or workload estimate "
+        "would make the answer more reliable."
+    ),
+)
+
+@tool_agent.tool_plain
+def estimate_minutes(module_count: int, minutes_per_module: int) -> int:
+    """Estimate total study time in minutes."""
+    return module_count * minutes_per_module
+
+@tool_agent.tool
+def lookup_topic(ctx: RunContext[CourseCatalog], topic: str) -> str:
+    """Look up a topic description from the course catalog."""
+    return ctx.deps.topics.get(topic.lower(), "No catalog entry found for that topic.")
+
+catalog = CourseCatalog(
+    topics={
+        "agents": "Agent systems combine model calls, tools, memory, and control flow.",
+        "structured outputs": "Structured outputs return validated data instead of free-form prose.",
+    }
+)
+
+tool_result = tool_agent.run_sync(
+    "Explain agents and estimate the time for 4 modules at 25 minutes each.",
+    deps=catalog,
+)
+```
+
+#### Structured Outputs
+
+* `output_type` asks Pydantic AI to return data that validates against a Python type.
+* Pydantic models are the most common output type.
+* If validation fails, Pydantic AI can ask the model to try again.
+* Structured outputs are useful for:
+  * API responses
+  * routing decisions
+  * saved records
+  * dashboards
+  * tests and validation
+
+```python
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent
+
+class StudyPlan(BaseModel):
+    topic: str = Field(description="The topic the learner should study.")
+    objectives: list[str] = Field(description="Concrete learning objectives.")
+    exercises: list[str] = Field(description="Practice tasks.")
+    estimated_minutes: int = Field(ge=1, description="Estimated effort in minutes.")
+    confidence: float = Field(ge=0, le=1, description="Confidence in the plan.")
+
+planner_agent = Agent(
+    OPENAI_MODEL,
+    output_type=StudyPlan,
+    instructions="Create compact, realistic study plans. Return only the requested structure.",
+)
+
+plan_result = planner_agent.run_sync(
+    "Create a study plan for learning Pydantic AI tools and structured outputs."
+)
+
+study_plan = plan_result.output
+study_plan_dict = study_plan.model_dump()
+```
+
+#### Orchestration
+
+* Pydantic AI applications can use multiple orchestration styles:
+  * single-agent workflows for simple tasks
+  * agent delegation, where one agent calls another agent through a tool
+  * programmatic handoff, where application code calls agents sequentially
+  * graph-based control flow for more complex state machines
+  * deeper autonomous agents when planning, files, or sandboxed execution are required
+* Agent delegation is useful when a coordinator should decide when to ask a specialist.
+* Programmatic handoff is useful when the application should keep explicit control of routing.
+* Usage limits can be added to protect against runaway loops or unexpected cost.
+
+```python
+from typing import Literal
+
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent, RunContext, UsageLimits
+
+class SpecialistAnswer(BaseModel):
+    answer: str
+    next_step: str
+
+policy_agent = Agent(
+    OPENAI_MODEL,
+    deps_type=dict[str, str],
+    output_type=SpecialistAnswer,
+    instructions="Answer from the supplied policy snippets. Be concise.",
+)
+
+@policy_agent.tool
+def policy_lookup(ctx: RunContext[dict[str, str]], topic: str) -> str:
+    """Look up a policy snippet by topic."""
+    return ctx.deps.get(topic.lower(), "No policy snippet found.")
+
+coordinator_agent = Agent(
+    OPENAI_MODEL,
+    instructions=(
+        "You coordinate specialist help. Use ask_policy_specialist for policy questions, "
+        "then summarize the answer for the user."
+    ),
+)
+
+@coordinator_agent.tool_plain
+def ask_policy_specialist(question: str) -> str:
+    """Ask the policy specialist agent for a grounded answer."""
+    result = policy_agent.run_sync(
+        question,
+        deps={
+            "refunds": "Refund requests must include an order ID and be filed within 30 days.",
+            "security": "Security incidents must be escalated immediately to the security team.",
+        },
+        usage_limits=UsageLimits(request_limit=5),
+    )
+    return result.output.answer
+
+delegation_result = coordinator_agent.run_sync(
+    "A customer asks about the refund policy. Get specialist help and answer."
+)
+
+class RouteDecision(BaseModel):
+    route: Literal["policy", "learning"]
+    reason: str
+
+router_agent = Agent(
+    OPENAI_MODEL,
+    output_type=RouteDecision,
+    instructions="Route the request to either policy or learning.",
+)
+
+learning_agent = Agent(
+    OPENAI_MODEL,
+    instructions="Explain technical learning topics clearly and briefly.",
+)
+
+route = router_agent.run_sync("How should I learn structured outputs?").output
+if route.route == "policy":
+    final_result = policy_agent.run_sync("How should I learn structured outputs?", deps={})
+else:
+    final_result = learning_agent.run_sync("How should I learn structured outputs?")
+```
+
+#### Exercise: Pydantic AI
+
+Notebook: [`lab/10_pydantic_ai.ipynb`](./lab/10_pydantic_ai.ipynb).
+
+* The notebook expands the Pydantic AI examples into a runnable local workflow.
+* Dependencies are expected from `requirements.in`; the notebook does not install packages.
+* It uses `python-dotenv` to load `OPENAI_API_KEY` and optional `OPENAI_MODEL`.
+* It covers:
+  * OpenAI setup for Pydantic AI model strings
+  * basic agent creation and dynamic system prompts
+  * dependency injection with `RunContext`
+  * plain tools with `@agent.tool_plain`
+  * context-aware tools with `@agent.tool`
+  * structured outputs with Pydantic models and `output_type`
+  * agent delegation through a coordinator tool
+  * programmatic handoff with a structured routing decision
+  * usage limits for safer orchestration
+
+```python
+import os
+from dataclasses import dataclass
+from datetime import date
+from typing import Literal
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent, RunContext, UsageLimits
+
+load_dotenv()
+
+def openai_model_name() -> str:
+    model_name = os.getenv("OPENAI_MODEL", "openai:gpt-5-nano")
+    if not model_name.startswith("openai:"):
+        model_name = f"openai:{model_name}"
+    return model_name
+
+OPENAI_MODEL = openai_model_name()
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+
+@dataclass
+class LearnerProfile:
+    name: str
+    level: str
+    goal: str
+
+coach_agent = Agent(
+    OPENAI_MODEL,
+    deps_type=LearnerProfile,
+    instructions="You are a concise AI learning coach. Give practical, beginner-safe guidance.",
+)
+
+@coach_agent.system_prompt
+def add_learner_context(ctx: RunContext[LearnerProfile]) -> str:
+    return (
+        f"The learner is {ctx.deps.name}. "
+        f"Level: {ctx.deps.level}. Goal: {ctx.deps.goal}. "
+        f"Today's date is {date.today()}."
+    )
+
+profile = LearnerProfile(
+    name="Mira",
+    level="beginner",
+    goal="understand when to use agent frameworks",
+)
+
+coach_result = coach_agent.run_sync(
+    "Create a three-step study path for this week.",
+    deps=profile,
+)
+
+@dataclass
+class CourseCatalog:
+    topics: dict[str, str]
+
+tool_agent = Agent(
+    OPENAI_MODEL,
+    deps_type=CourseCatalog,
+    instructions=(
+        "You recommend course topics. Use tools when a catalog lookup or workload estimate "
+        "would make the answer more reliable."
+    ),
+)
+
+@tool_agent.tool_plain
+def estimate_minutes(module_count: int, minutes_per_module: int) -> int:
+    """Estimate total study time in minutes."""
+    return module_count * minutes_per_module
+
+@tool_agent.tool
+def lookup_topic(ctx: RunContext[CourseCatalog], topic: str) -> str:
+    """Look up a topic description from the course catalog."""
+    return ctx.deps.topics.get(topic.lower(), "No catalog entry found for that topic.")
+
+catalog = CourseCatalog(
+    topics={
+        "agents": "Agent systems combine model calls, tools, memory, and control flow.",
+        "structured outputs": "Structured outputs return validated data instead of free-form prose.",
+    }
+)
+
+tool_result = tool_agent.run_sync(
+    "Explain agents and estimate the time for 4 modules at 25 minutes each.",
+    deps=catalog,
+)
+
+class StudyPlan(BaseModel):
+    topic: str = Field(description="The topic the learner should study.")
+    objectives: list[str] = Field(description="Concrete learning objectives.")
+    exercises: list[str] = Field(description="Practice tasks.")
+    estimated_minutes: int = Field(ge=1, description="Estimated effort in minutes.")
+    confidence: float = Field(ge=0, le=1, description="Confidence in the plan.")
+
+planner_agent = Agent(
+    OPENAI_MODEL,
+    output_type=StudyPlan,
+    instructions="Create compact, realistic study plans. Return only the requested structure.",
+)
+
+plan_result = planner_agent.run_sync(
+    "Create a study plan for learning Pydantic AI tools and structured outputs."
+)
+study_plan = plan_result.output
+
+class SpecialistAnswer(BaseModel):
+    answer: str
+    next_step: str
+
+policy_agent = Agent(
+    OPENAI_MODEL,
+    deps_type=dict[str, str],
+    output_type=SpecialistAnswer,
+    instructions="Answer from the supplied policy snippets. Be concise.",
+)
+
+@policy_agent.tool
+def policy_lookup(ctx: RunContext[dict[str, str]], topic: str) -> str:
+    """Look up a policy snippet by topic."""
+    return ctx.deps.get(topic.lower(), "No policy snippet found.")
+
+coordinator_agent = Agent(
+    OPENAI_MODEL,
+    instructions=(
+        "You coordinate specialist help. Use ask_policy_specialist for policy questions, "
+        "then summarize the answer for the user."
+    ),
+)
+
+@coordinator_agent.tool_plain
+def ask_policy_specialist(question: str) -> str:
+    """Ask the policy specialist agent for a grounded answer."""
+    result = policy_agent.run_sync(
+        question,
+        deps={
+            "refunds": "Refund requests must include an order ID and be filed within 30 days.",
+            "security": "Security incidents must be escalated immediately to the security team.",
+        },
+        usage_limits=UsageLimits(request_limit=5),
+    )
+    return result.output.answer
+
+delegation_result = coordinator_agent.run_sync(
+    "A customer asks about the refund policy. Get specialist help and answer."
+)
+
+class RouteDecision(BaseModel):
+    route: Literal["policy", "learning"]
+    reason: str
+
+router_agent = Agent(
+    OPENAI_MODEL,
+    output_type=RouteDecision,
+    instructions="Route the request to either policy or learning.",
+)
+
+learning_agent = Agent(
+    OPENAI_MODEL,
+    instructions="Explain technical learning topics clearly and briefly.",
+)
+
+user_question = "How should I learn structured outputs?"
+route = router_agent.run_sync(user_question).output
+if route.route == "policy":
+    final_result = policy_agent.run_sync(user_question, deps={})
+else:
+    final_result = learning_agent.run_sync(user_question)
+```
+
