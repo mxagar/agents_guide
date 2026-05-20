@@ -25,6 +25,7 @@ Table of Contents:
     - [Traditional Monitoring vs LLM Observability](#traditional-monitoring-vs-llm-observability)
     - [The Three Pillars of LLM Observability](#the-three-pillars-of-llm-observability)
     - [ROI Calculation](#roi-calculation)
+  - [2. Understanding LLM Costs](#2-understanding-llm-costs)
 
 ## 1. Introduction to LangFuse
 
@@ -407,266 +408,119 @@ installed CLI version.
 
 ### Why LLM Observability?
 
-Now, let's talk about LLM observability and cost management.
-
-This is a very hot topic and most importantly, it's a very crucial and important topic for
-
-anyone or any organization building or using large-language models or AI in general.
-
-The truth of the matter is you're spending more money on large-language models, probably
-
-more than you think.
-
-Now, here's what most teams discover too late.
-
-Number one, they discover that a single runaway prompt can cost 10,000 in an afternoon. That's scary.
-
-Or they discover that token user spikes 300% and no one knows why.
-
-Or users complain about low responses, but you can't identify the bottleneck.
-
-Or maybe your RAG pipeline retrieves garbage and the LLM hallucinates confidently, which is horrible.
-
-That's really bad for business.
-
-And I've seen teams burn through their entire quarterly budget in two weeks because one
-
-developer left a retry loop running on an accident.
-
-Now this isn't about monitoring for the sake of monitoring.
-
-This is about protecting your budget and of course, your reputation.
-
-Now let's look at real numbers real quick.
-
-So here is a real cost comparison table here.
-
-So monthly LLM spend category without OBS will be $35,000 or more.
-
-Now remember, this is a huge scale operation.
-
-And with OBS will be about $15,000.
-
-So you can see that is a huge reduced cost.
-
-For wasted retries, $5,000 plus without OBS.
-
-With OBS, you have about zero.
-
-And debug time per week, about 20 hours or more without OBS and about two hours if you
-
-are using OBS, if you are managing everything using observability.
-
-Incident response will take about days without OBS and pretty much same day with OBS.
-
-Now the question isn't can we afford observability?
-
-Let me show you a real example of what happens when things go wrong.
-
-So we're going to talk about the hidden costs of LLM applications.
-
-What you need to understand is that what you don't measure, you can't manage.
-
-So this is a saying that is applicable to any industry, essentially.
-
-So we must measure things.
-
-That way, it's easier for us to actually manage them.
-
-The real cost breakdown is as follows.
-
-So we have API costs.
-
-These are tokens.
-
-We have compute costs.
-
-So talking about embeddings inference, we have debugging time.
-
-These are engineering hours.
-
-We also have incident costs, so downtime, reputation, and so on.
-
-Now, costs tend to increase without visibility.
-
-For instance, you find teams saying that token costs grew 400%.
-
-We only found out about that at the end of the month.
-
-So they actually had no idea that the cost had grown 400%.
-
-So this is one thing that I hear from enterprise teams all the time.
-
-Now, let's look at the risk matrix here.
-
-So without observability.
-
-So we have risk column.
-
-We have impact and probability token spike.
-
-The impact without observability is really high, which means usually the cost
-
-is up to 10K plus, depending on the kind of AI application or LM based
-
-applications we're building, and the probability is also, of course, very high.
-
-Silent failures.
-
-The impact is quite medium, not as high,
-
-but the probability for that to happen without observability is high.
-
-And we have performance degradation.
-
-So the impact is fairly medium.
-
-Probability still high.
-
-We have compliance violations.
-
-So the impact is extremely critical, but the probability is medium.
-
-So looking at this matrix here, you can see the correlation between the risk,
-
-the impact, and the probability without observability.
-
-If you're running your LM workflows without observability.
+- LLM observability is essential because LLM applications can become expensive, slow, unreliable, or risky without clear visibility into what is happening.
+- Teams often discover problems too late:
+  - runaway prompts or retry loops can create large unexpected bills;
+  - token usage can spike without an obvious cause;
+  - users can experience slow or low-quality responses while engineers lack
+    enough context to debug them;
+  - RAG systems can retrieve poor context and cause confident hallucinations.
+- Observability is not just monitoring for its own sake. It protects:
+  - budget, by exposing token usage, retries, and expensive workflows;
+  - product quality, by revealing poor prompts, weak retrieval, and bad outputs;
+  - reputation, by catching failures before users or customers escalate them.
+- The hidden costs of LLM systems include:
+  - API/token costs;
+  - compute costs for embeddings, inference, and retrieval;
+  - engineering time spent debugging;
+  - incident costs from downtime, bad answers, compliance issues, or customer
+    impact.
+- Without observability, teams cannot manage what they cannot measure. Costs and
+  failures tend to grow silently until they show up in bills, support tickets, or
+  incidents.
+- Key risks without observability:
+  - **Token spikes**: high impact and high probability.
+  - **Silent failures**: medium impact but high probability.
+  - **Performance degradation**: medium impact and high probability.
+  - **Compliance violations**: critical impact, even if probability is lower.
 
 ### Traditional Monitoring vs LLM Observability
 
-Keep in mind that observability for LLMs isn't the same as traditional application monitoring.
-
-So you're not just tracking request response times.
-
-What you're doing, you're tracking token flows, you're tracking prompt effectiveness, retrieval
-
-quality, model behavior, and cost attribution.
-
-So these are pieces that you need to keep in mind.
-
-Token flows, for instance, how many tokens in, how many out, what's the ratio, you're
-
-tracking prompt effectiveness, is your prompt getting good results?
-
-That's a good question, right, for prompt effectiveness.
-
-Retrieval quality, is your RAG returning relevant chunks?
-
-Model behavior, is the LLM hallucinating?
-
-Is it being verbose?
-
-Is it refusing to answer?
-
-As well as cost attribution.
-
-So this is where we talk about which feature is eating your budget.
-
-So traditional monitoring looks like this.
-
-So essentially, sees your app as a black box.
-
-So essentially, you have a request, something happens, and we get a response.
-
-And in this black box, we're looking at latency and errors that may happen, but all is contained.
-
-But if we look at LLM observability, we have a full traceability of what's going on.
-
-We can look at the token flows, because these are being tracked.
-
-We can look at prompt effectiveness, as we talked about, as well as the cost attribution and so on.
-
-Now, this visibility isn't optional in production, because this is how we're able to debug issues
-
-in minutes instead of hours, we're able to, say, optimize costs by 50 to 80%.
-
-We're also able to start catching problems before users report them to us, right.
-
-And also, it proves to leadership exactly where the budget goes.
-
-That way, you don't have the friction between the leadership and the managers and the operation
-
-layer of your business or your company.
+- Traditional monitoring focuses on generic application health:
+  - request latency;
+  - error rates;
+  - uptime;
+  - infrastructure metrics.
+- Traditional monitoring often treats the application as a black box: a request
+  enters, internal work happens, and a response leaves.
+- LLM observability looks inside the LLM workflow and captures details that
+  traditional monitoring misses:
+  - prompts and responses;
+  - token input/output flows;
+  - model name and model behavior;
+  - retrieval quality in RAG systems;
+  - tool calls and agent steps;
+  - cost attribution by request, user, feature, or model.
+- LLM-specific questions include:
+  - Did the prompt produce a good answer?
+  - Did the RAG pipeline retrieve relevant chunks?
+  - Did the model hallucinate, refuse, or become overly verbose?
+  - Which feature or user segment is driving cost?
+  - Which step in the chain is slow or failing?
+- In production, LLM observability helps teams:
+  - debug issues in minutes instead of hours;
+  - optimize token and model costs;
+  - catch quality or latency issues before users report them;
+  - explain to stakeholders where LLM budget is going.
 
 ### The Three Pillars of LLM Observability
 
-LLM observability requires us to look at the three pillars for LLMs.
-
-The first one is traces.
-
-This is end-to-end request flows through every step.
-
-So essentially, going deep and look at what's going on with our LLMs.
-
-And we have the metric side of things.
-
-So this is the part where we look at token usage, latency, cost per request, and evaluation.
-
-So evaluating the performance of our large knowledge models or large knowledge model
-
-systems is crucial because this is where we get the quality scores and output assessment.
-
-So we know that things are working as intended.
-
-Now what you'll measure in this case.
-
-So the first thing you'll measure, of course, is token usage.
-
-So input-output ratio.
-
-You also measure the latency per step breakdown, right, how fast things are actually working or slow.
-
-And the cost is very important, but the cost, you can subdivide it per request, per feature, or per user.
-
-So you have all those breakdowns, as well as the quality, because it's important to
-
-see that things are coming in or coming out with relevancy, and then what is the hallucination
-
-rate of the large knowledge model.
-
-And we also have the errors.
-
-Very importantly, we wanted to also separate them by type, by model, by prompt, and many
-
-other categories we may need.
+- **Traces**
+  - Show the end-to-end flow of a request.
+  - Capture each step in the workflow: prompt construction, retrieval, tool
+    calls, model calls, parsing, evaluation, and final response.
+  - Make it easier to identify which step is slow, expensive, incorrect, or
+    failing.
+- **Metrics**
+  - Aggregate operational and cost signals across many requests.
+  - Useful metrics include token usage, latency, cost per request, cost per
+    feature, cost per user, error rates, and model usage.
+  - Metrics help teams spot trends, spikes, regressions, and budget issues.
+- **Evaluations**
+  - Measure output quality, not just system health.
+  - Can track relevance, hallucination risk, correctness, safety, tone,
+    groundedness, or task-specific quality.
+  - Evaluation scores make it possible to compare prompts, models, retrieval
+    strategies, and application versions.
+- Common measurements:
+  - input/output token ratio;
+  - latency by workflow step;
+  - cost by request, feature, model, user, or customer;
+  - retrieval relevance;
+  - hallucination rate;
+  - error rate by type, model, prompt, or workflow.
 
 ### ROI Calculation
 
-So now I'm going to show you this ROI calculator or calculations to make the
+- Observability has a direct business case because it reduces preventable LLM
+  costs and engineering effort.
+- Example monthly baseline without observability:
+  - LLM spend: `$20,000`;
+  - estimated waste: `30%`, or about `$6,000`;
+  - debugging effort: `10 hours/week * $100/hour`, or about `$4,000/month`;
+  - amortized incident cost: `$5,000/month`;
+  - total preventable cost: about `$15,000/month`.
+- Example investment:
+  - observability platform: about `$500-$2,000/month`;
+  - setup time: about `8 hours` one time.
+- Potential benefits:
+  - lower token spend through prompt/model optimization;
+  - less wasted retry traffic;
+  - faster debugging with traces;
+  - fewer surprise bills through cost alerts;
+  - faster incident response.
+- Example outcomes mentioned in the course:
+  - token cost reduction from prompt optimization;
+  - up to `80%` less debugging time with proper tracing;
+  - fewer runaway-cost surprises with alerts.
+- Simple ROI formula:
 
-business case. Okay, so in this case here, let's say current state without
+```text
+savings = token_waste + (debug_time * hourly_rate) + (incidents_prevented * incident_cost)
+```
 
-observability, your monthly LLM spend is $20,000.
+- The practical question is not only "Can we afford observability?", but "How
+  much are we already losing by not observing the system?"
 
-Your estimated waste about 30%, so that's 60 or 6,000 I should say. Your debug
+## 2. Understanding LLM Costs
 
-time, let's say 10 hours per week times 100, that's 4,000 a month. And your
-
-incident cost amortized, of course, is $5,000. So that means total preventable
-
-cost is $15,000. So if you add the incident cost, debug time, estimated waste,
-
-that's $15,000. If you were to go and make some investment on an
-
-observability, LLM observability platform, cost $500 to $2,000 a month, and the
-
-setup time would be about eight hours, and this is just one time, that is
-
-awesome because then you have 7 to 30% return on your ROI. This is only in the
-
-first month, so this potentially results in 47% token cost reduction. All of that
-
-from prompt optimization as an example. And 80% less debugging time with proper
-
-tracing, of course, because you have access to that. And then $0 in
-
-runway surprises with cost alerts. This isn't theoretical. So here's the ROI
-
-formula that I would suggest you look into or use in your own organizations. So
-
-savings is equal to token waste plus debug time times rate plus the incidents
-
-prevented times cost. So this will give you the savings that you would get from
-
-implementing a good observability system.
