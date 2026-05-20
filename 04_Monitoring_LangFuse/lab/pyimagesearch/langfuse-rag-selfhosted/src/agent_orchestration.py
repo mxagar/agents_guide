@@ -6,7 +6,7 @@ search → analyze → answer
 
 import os
 from pathlib import Path
-from langfuse.decorators import observe, langfuse_context
+from langfuse import observe, get_client
 
 # Load environment variables
 try:
@@ -89,13 +89,13 @@ def run_agent_workflow(query: str, retriever: TracedRetriever, llm_client: Trace
     answer = agent_answer(query, docs, intent, llm_client)
     print(f"✅ Answer generated\n")
     
-    langfuse_context.update_current_observation(
+    get_client().update_current_span(
         output={"answer": answer, "intent": intent}
     )
     
     # Get trace URL with correct host
-    trace_id = langfuse_context.get_current_trace_id()
-    langfuse_host = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+    trace_id = get_client().get_current_trace_id()
+    langfuse_host = os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST", "http://localhost:3000")
     
     print(f"{'='*50}")
     print(f"Workflow Complete")

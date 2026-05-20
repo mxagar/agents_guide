@@ -8,7 +8,7 @@ import time
 import os
 from pathlib import Path
 from typing import List, Dict
-from langfuse.decorators import observe, langfuse_context
+from langfuse import observe, get_client
 
 # Load environment variables
 try:
@@ -45,7 +45,7 @@ class TracedLLMClient:
         self.model = model
         self.max_retries = max_retries
     
-    @observe(name="llm_completion")
+    @observe(name="llm_completion", capture_input=False)
     def complete(self, messages: List[Dict[str, str]], **kwargs) -> Dict:
         """
         Generate completion with tracing and retry logic.
@@ -62,8 +62,14 @@ class TracedLLMClient:
         temperature = kwargs.get("temperature", llm_config.get("temperature", 0.7))
         max_tokens = kwargs.get("max_tokens", llm_config.get("max_tokens", 300))
         
-        langfuse_context.update_current_observation(
-            input={"messages": messages, "model": self.model}
+        get_client().update_current_span(
+            input={"messages": messages},
+            metadata={
+                "model": self.model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "feature": "rag-generation",
+            },
         )
         
         last_error = None
@@ -71,37 +77,38 @@ class TracedLLMClient:
             try:
                 start_time = time.time()
                 response = self.client.chat.completions.create(
+                    name="rag-answer-generation",
                     model=self.model,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    metadata={
+                        "attempt": attempt + 1,
+                        "feature": "rag-generation",
+                    },
                 )
                 end_time = time.time()
                 
                 content = response.choices[0].message.content
+                usage = response.usage.model_dump() if response.usage else {}
                 
-                langfuse_context.update_current_observation(
+                get_client().update_current_span(
                     output={"content": content},
-                    usage={
-                        "input": response.usage.prompt_tokens,
-                        "output": response.usage.completion_tokens,
-                        "total": response.usage.total_tokens
-                    },
                     metadata={
                         "attempt": attempt + 1,
                         "model": self.model,
                         "temperature": temperature,
                         "max_tokens": max_tokens,
-                        "input_tokens": response.usage.prompt_tokens,
-                        "output_tokens": response.usage.completion_tokens,
-                        "total_tokens": response.usage.total_tokens,
+                        "input_tokens": usage.get("prompt_tokens"),
+                        "output_tokens": usage.get("completion_tokens"),
+                        "total_tokens": usage.get("total_tokens"),
                         "latency_ms": round((end_time - start_time) * 1000, 2)
                     }
                 )
                 
                 return {
                     "content": content,
-                    "usage": response.usage.model_dump(),
+                    "usage": usage,
                     "success": True
                 }
                 
@@ -113,8 +120,9 @@ class TracedLLMClient:
         
         # All retries failed
         error_msg = f"LLM call failed after {self.max_retries} attempts: {last_error}"
-        langfuse_context.update_current_observation(
+        get_client().update_current_span(
             level="ERROR",
+            status_message=error_msg,
             output={"error": error_msg}
         )
         return {"content": None, "error": error_msg, "success": False}
@@ -131,9 +139,11 @@ if __name__ == "__main__":
     )
     
     print(f"Response: {result['content']}")
-    print(f"Tokens: {result['usage']['total_tokens']}")
+    print(f"Tokens: {result.get('usage', {}).get('total_tokens', 'unknown')}")
     
     # View trace
-    trace_id = langfuse_context.get_current_trace_id()
-    langfuse_host = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
-    print(f"🔍 View trace: {langfuse_host}/trace/{trace_id}")
+    langfuse = get_client()
+    trace_id = langfuse.get_current_trace_id()
+    langfuse_base_url = os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+    print(f"🔍 View trace: {langfuse_base_url}/trace/{trace_id}")
+    langfuse.flush()

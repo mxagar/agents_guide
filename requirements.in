@@ -36,6 +36,7 @@ numpy<2.3
 onnx
 onnxruntime
 opencv-python-headless>=4.12.0.88
+opentelemetry-instrumentation-langchain
 openai
 pandas
 peft
@@ -52,6 +53,7 @@ rank-bm25
 safetensors
 scikit-learn
 seaborn
+sentence-transformers
 sqlalchemy
 tavily-python
 tensorboard

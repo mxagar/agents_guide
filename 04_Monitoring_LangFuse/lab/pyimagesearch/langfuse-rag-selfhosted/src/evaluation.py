@@ -5,7 +5,7 @@ Provides automatic quality metrics for RAG outputs.
 """
 
 from typing import List, Dict
-from langfuse.decorators import observe, langfuse_context
+from langfuse import observe, get_client
 from config import get_evaluation_config
 
 
@@ -24,7 +24,7 @@ def evaluate_relevancy(query: str, retrieved_docs: List[Dict], answer: str) -> f
     Returns:
         Relevancy score between 0 and 1
     """
-    langfuse_context.update_current_observation(
+    get_client().update_current_span(
         input={
             "query": query,
             "doc_count": len(retrieved_docs),
@@ -52,7 +52,7 @@ def evaluate_relevancy(query: str, retrieved_docs: List[Dict], answer: str) -> f
     # Combine scores (weighted average)
     relevancy_score = 0.6 * keyword_coverage + 0.4 * doc_relevance
     
-    langfuse_context.update_current_observation(
+    get_client().update_current_span(
         output={
             "relevancy_score": relevancy_score,
             "keyword_coverage": keyword_coverage,
@@ -78,7 +78,7 @@ def evaluate_hallucination_risk(retrieved_docs: List[Dict], answer: str) -> floa
     Returns:
         Hallucination risk between 0 (low risk) and 1 (high risk)
     """
-    langfuse_context.update_current_observation(
+    get_client().update_current_span(
         input={
             "doc_count": len(retrieved_docs),
             "answer_length": len(answer)
@@ -87,7 +87,7 @@ def evaluate_hallucination_risk(retrieved_docs: List[Dict], answer: str) -> floa
     
     if not retrieved_docs:
         # No context = high hallucination risk
-        langfuse_context.update_current_observation(
+        get_client().update_current_span(
             output={"hallucination_risk": 1.0, "reason": "No retrieved documents"}
         )
         return 1.0
@@ -102,7 +102,7 @@ def evaluate_hallucination_risk(retrieved_docs: List[Dict], answer: str) -> floa
     answer_words = set(answer.lower().split()) - stop_words
     
     if not answer_words:
-        langfuse_context.update_current_observation(
+        get_client().update_current_span(
             output={"hallucination_risk": 0.5, "reason": "Empty answer after stop word removal"}
         )
         return 0.5
@@ -114,7 +114,7 @@ def evaluate_hallucination_risk(retrieved_docs: List[Dict], answer: str) -> floa
     # Hallucination risk is inverse of grounding
     hallucination_risk = 1.0 - grounding_ratio
     
-    langfuse_context.update_current_observation(
+    get_client().update_current_span(
         output={
             "hallucination_risk": hallucination_risk,
             "grounding_ratio": grounding_ratio,
@@ -139,7 +139,7 @@ def evaluate_rag_output(query: str, retrieved_docs: List[Dict], answer: str) -> 
     Returns:
         Dict with relevancy_score, hallucination_risk, and overall_quality
     """
-    langfuse_context.update_current_observation(
+    get_client().update_current_span(
         input={
             "query": query,
             "doc_count": len(retrieved_docs),
@@ -168,25 +168,25 @@ def evaluate_rag_output(query: str, retrieved_docs: List[Dict], answer: str) -> 
     }
     
     # Log scores to LangFuse
-    langfuse_context.score_current_observation(
+    get_client().score_current_span(
         name="relevancy",
         value=relevancy_score,
         comment=f"Keyword and document relevance"
     )
     
-    langfuse_context.score_current_observation(
+    get_client().score_current_span(
         name="hallucination_risk",
         value=hallucination_risk,
         comment=f"Risk of ungrounded claims"
     )
     
-    langfuse_context.score_current_observation(
+    get_client().score_current_span(
         name="overall_quality",
         value=overall_quality,
         comment=f"Combined quality score (threshold: {min_quality})"
     )
     
-    langfuse_context.update_current_observation(
+    get_client().update_current_span(
         output=results
     )
     

@@ -5,3 +5,6 @@
 	path = 03_CrewAI_AutoGen_BeeAI/lab/06_nourish_bot/NourishBot
 	url = https://github.com/HaileyTQuach/Smart-Nutritional-App.git
 	branch = 5-final
+[submodule "04_Monitoring_LangFuse/lab/udemy-langfuse"]
+	path = 04_Monitoring_LangFuse/lab/udemy-langfuse
+	url = https://github.com/pdichone/llm-observability-course.git

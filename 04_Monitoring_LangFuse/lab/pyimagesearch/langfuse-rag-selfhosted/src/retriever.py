@@ -7,7 +7,7 @@ Uses SentenceTransformers (no API costs) + FAISS for vector search.
 import numpy as np
 from typing import List, Dict, Tuple
 from sentence_transformers import SentenceTransformer
-from langfuse.decorators import observe, langfuse_context
+from langfuse import observe, get_client
 from config import get_embeddings_config, get_rag_config
 
 try:
@@ -43,13 +43,13 @@ class TracedRetriever:
     @observe(name="embed_text")
     def embed(self, text: str) -> np.ndarray:
         """Generate embedding using local model."""
-        langfuse_context.update_current_observation(
+        get_client().update_current_span(
             input={"text_preview": text[:100]}
         )
         
         embedding = self.model.encode([text], normalize_embeddings=True)[0]
         
-        langfuse_context.update_current_observation(
+        get_client().update_current_span(
             output={"embedding_dim": len(embedding)}
         )
         
@@ -62,7 +62,7 @@ class TracedRetriever:
             print("⚠️  No documents to index")
             return
         
-        langfuse_context.update_current_observation(
+        get_client().update_current_span(
             input={"document_count": len(documents)}
         )
         
@@ -77,7 +77,7 @@ class TracedRetriever:
         # Add to FAISS index
         self.index.add(embeddings)
         
-        langfuse_context.update_current_observation(
+        get_client().update_current_span(
             output={"indexed_count": len(documents)}
         )
         
@@ -103,12 +103,12 @@ class TracedRetriever:
         # Check if index is empty
         if self.index.ntotal == 0:
             print("⚠️  Index is empty, no documents to retrieve")
-            langfuse_context.update_current_observation(
+            get_client().update_current_span(
                 output={"results": [], "error": "Empty index"}
             )
             return []
         
-        langfuse_context.update_current_observation(
+        get_client().update_current_span(
             input={"query": query, "top_k": top_k}
         )
         
@@ -132,7 +132,7 @@ class TracedRetriever:
                     "distance": float(distance)
                 })
         
-        langfuse_context.update_current_observation(
+        get_client().update_current_span(
             output={
                 "result_count": len(results),
                 "scores": [r["score"] for r in results],

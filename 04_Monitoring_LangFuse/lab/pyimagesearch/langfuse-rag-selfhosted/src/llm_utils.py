@@ -5,12 +5,12 @@ Provides consistent OpenAI-compatible client configuration across all examples.
 
 import os
 from typing import Union, Tuple
-from openai import OpenAI
+from langfuse.openai import OpenAI
 
 
 def get_llm_client(timeout: int = 60, load_model_from_config: bool = False) -> Union[OpenAI, Tuple[OpenAI, str]]:
     """
-    Get configured OpenAI client for vLLM.
+    Get configured OpenAI-compatible client for vLLM with Langfuse tracing.
     
     Args:
         timeout: Request timeout in seconds (default: 60)
@@ -21,6 +21,8 @@ def get_llm_client(timeout: int = 60, load_model_from_config: bool = False) -> U
         
     Note:
         Uses OPENAI_BASE_URL and OPENAI_API_KEY from environment.
+        The Langfuse OpenAI wrapper preserves the OpenAI SDK API while tracing
+        generations, model names, token usage, latency, and API errors.
         Defaults to vLLM running at http://localhost:8000/v1
     """
     # Check environment variables and warn if missing

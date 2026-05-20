@@ -7,7 +7,7 @@ retrieve → build_prompt → generate → evaluate
 import os
 from pathlib import Path
 from typing import List, Dict
-from langfuse.decorators import observe, langfuse_context
+from langfuse import observe, get_client
 
 # Load environment variables
 try:
@@ -23,7 +23,7 @@ from retriever import TracedRetriever
 from evaluation import evaluate_rag_output
 
 
-@observe(name="rag_pipeline")
+@observe(name="rag_pipeline", capture_input=False)
 def run_rag_pipeline(
     question: str,
     retriever: TracedRetriever,
@@ -38,7 +38,14 @@ def run_rag_pipeline(
     print(f"Question: {question}")
     print(f"{'='*50}\n")
     
-    langfuse_context.update_current_observation(
+    langfuse = get_client()
+    langfuse.update_current_trace(
+        name="rag_pipeline",
+        input={"question": question},
+        tags=["rag", "self-hosted", "pyimagesearch"],
+        metadata={"top_k": top_k, "feature": "rag"},
+    )
+    langfuse.update_current_span(
         input={"question": question, "top_k": top_k}
     )
     
@@ -75,7 +82,14 @@ def run_rag_pipeline(
     print("Step 4: Evaluating quality...")
     evaluation_results = evaluate_rag_output(question, docs, answer)
     
-    langfuse_context.update_current_observation(
+    langfuse.update_current_trace(
+        output={
+            "answer": answer,
+            "sources_count": len(docs),
+            "evaluation": evaluation_results
+        }
+    )
+    langfuse.update_current_span(
         output={
             "answer": answer,
             "sources_count": len(docs),
@@ -90,12 +104,12 @@ def run_rag_pipeline(
     print(f"  Passed: {'✅' if evaluation_results['passed'] else '❌'}\n")
     
     # Get trace URL with correct host
-    trace_id = langfuse_context.get_current_trace_id()
-    langfuse_host = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+    trace_id = langfuse.get_current_trace_id()
+    langfuse_base_url = os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST", "http://localhost:3000")
     
     print(f"{'='*50}")
     print(f"✅ Pipeline Complete")
-    print(f"🔍 View trace: {langfuse_host}/trace/{trace_id}")
+    print(f"🔍 View trace: {langfuse_base_url}/trace/{trace_id}")
     print(f"{'='*50}\n")
     
     return {
@@ -124,3 +138,5 @@ if __name__ == "__main__":
     
     if result["success"]:
         print(f"Answer:\n{result['answer']}\n")
+    
+    get_client().flush()
