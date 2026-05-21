@@ -26,6 +26,10 @@ Table of Contents:
     - [The Three Pillars of LLM Observability](#the-three-pillars-of-llm-observability)
     - [ROI Calculation](#roi-calculation)
   - [2. Understanding LLM Costs](#2-understanding-llm-costs)
+    - [Input and Output Tokens](#input-and-output-tokens)
+    - [Where Costs Hide: RAG and Agentic Pipelines](#where-costs-hide-rag-and-agentic-pipelines)
+    - [The Hidden Cost Multipliers](#the-hidden-cost-multipliers)
+  - [3. LangFuse as Obswervability Platform](#3-langfuse-as-obswervability-platform)
 
 ## 1. Introduction to LangFuse
 
@@ -523,4 +527,165 @@ savings = token_waste + (debug_time * hourly_rate) + (incidents_prevented * inci
   much are we already losing by not observing the system?"
 
 ## 2. Understanding LLM Costs
+
+### Input and Output Tokens
+
+- LLM pricing is based on **tokens**, not characters or words.
+- A rough rule of thumb is that one token is about four English characters, but the ratio depends on the text.
+- Tokenization varies by content type:
+  - `"Hello, world!"` has 13 characters but only 4 tokens.
+  - A normal sentence such as `"The quick brown fox jumps over the lazy dog."` has 44 characters and about 10 tokens.
+  - Code often tokenizes less efficiently because syntax creates many small tokens.
+  - Long words can also split into many tokens.
+- Output tokens usually cost **2-5x more** than input tokens.
+- Example per-1M-token prices from the course material:
+  - GPT-4o: about `$2.50` input and `$10.00` output.
+  - GPT-4o mini: about `$0.15` input and `$0.60` output.
+  - Claude 3.5 Sonnet: about `$3.00` input and `$15.00` output.
+  - Claude 3.5 Haiku: about `$0.25` input and `$1.25` output.
+  - Gemini 1.5 Pro: about `$1.25` input and `$5.00` output.
+- The exact prices change over time; the important pattern is the input/output ratio and the large gap between model tiers.
+- Verbose responses are expensive because they increase output tokens.
+- Long system prompts are usually cheaper than long responses because they are input tokens.
+- Asking the model to be concise is a direct cost optimization.
+- Cost estimation requires:
+  - Counting input and output tokens.
+  - Looking up the selected model's input and output prices per million tokens.
+  - Calculating input cost and output cost separately, then adding them.
+- Tokenizers can differ between model providers, so token counts for non-OpenAI models may only be approximate when using a fallback tokenizer.
+- A small single-request cost can become significant at production volume.
+- In the course example, the same prompt/response shape costs about `$415` per 1M monthly requests with GPT-4o, about `$25` with GPT-4o mini, and about `$50` with Claude 3.5 Haiku.
+- Key optimization levers:
+  - Choose the cheapest model that performs the task well.
+  - Shorten prompts and remove repetitive instructions.
+  - Limit output length with concise instructions and `max_tokens` where appropriate.
+
+Examples in [`lab/udemy-langfuse/`](./lab/udemy-langfuse/):
+
+```python
+##### -- tokens-demo-1.py
+
+import tiktoken
+
+# Initialize the tokenizer for GPT-4
+enc = tiktoken.encoding_for_model("gpt-4")
+
+# Let's count some tokens
+examples = [
+    "Hello, world!",  # Simple
+    "The quick brown fox jumps over the lazy dog.",  # Standard sentence
+    "def calculate_total(items): return sum(item.price for item in items)",  # Code
+    "supercalifragilisticexpialidocious",  # Long word
+]
+
+for text in examples:
+    tokens = enc.encode(text)
+    print(f"'{text}'")
+    print(f"  Characters: {len(text)}")
+    print(f"  Tokens: {len(tokens)}")
+    print(f"  Tokens: {tokens}")
+    print()
+
+
+##### -- token-calculator-2.py
+
+import tiktoken
+from dataclasses import dataclass
+from typing import Dict
+
+@dataclass
+class ModelPricing:
+    name: str
+    input_cost_per_million: float
+    output_cost_per_million: float
+
+# Current pricing (January 2026)
+MODELS = {
+    "gpt-4o": ModelPricing("gpt-4o", 2.50, 10.00),
+    "gpt-4o-mini": ModelPricing("gpt-4o-mini", 0.15, 0.60),
+    "claude-3.5-sonnet": ModelPricing("claude-3.5-sonnet", 3.00, 15.00),
+    "claude-3.5-haiku": ModelPricing("claude-3.5-haiku", 0.25, 1.25),
+}
+
+def count_tokens(text: str, model: str = "gpt-4o") -> int:
+    """Count tokens for a given text."""
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except KeyError:
+        enc = tiktoken.get_encoding("cl100k_base")
+    return len(enc.encode(text))
+
+def calculate_cost(
+    input_text: str,
+    output_text: str,
+    model: str = "gpt-4o"
+) -> Dict[str, float]:
+    """Calculate the cost of an LLM interaction."""
+
+    pricing = MODELS.get(model)
+    if not pricing:
+        raise ValueError(f"Unknown model: {model}")
+
+    input_tokens = count_tokens(input_text, model)
+    output_tokens = count_tokens(output_text, model)
+
+    input_cost = (input_tokens / 1_000_000) * pricing.input_cost_per_million
+    output_cost = (output_tokens / 1_000_000) * pricing.output_cost_per_million
+
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "input_cost": input_cost,
+        "output_cost": output_cost,
+        "total_cost": input_cost + output_cost,
+        "model": model,
+    }
+```
+
+### Where Costs Hide: RAG and Agentic Pipelines
+
+![RAG and Agentic Pipeline Costs](./assets/rag_agent_costs.png)
+
+- RAG and agentic pipelines hide cost across multiple steps:
+  - User query embedding is usually very cheap.
+  - Vector search is usually minimal.
+  - Context assembly increases the amount of text passed to the model.
+  - The first LLM call processes the assembled prompt and retrieved context.
+  - Agent decisions can trigger tool calls, API lookups, and additional LLM calls.
+  - The final response adds another output-token cost.
+- A single query can look inexpensive, but production volume changes the economics quickly.
+- In the course example, a sub-cent query becomes about `$700/day`, `$21,000/month`, or `$252,000/year` at `100,000` queries per day.
+- That estimate assumes the happy path: no retries, no errors, and no overly verbose responses.
+- LLM calls often make up more than 95% of total pipeline cost, even as model inference prices fall.
+- Top cost drivers:
+  - Bloated system prompts sent with every request.
+  - Excessive retrieved context; the goal is the **right** context, not the most context.
+  - Agent reasoning loops that repeatedly call the model.
+  - Growing chat history, which increases context size linearly.
+  - Wrong model selection, which can create a very large price difference for the same workflow.
+
+### The Hidden Cost Multipliers
+
+![Task-Model Matrix](./assets/task_model_matrix.png)
+
+- Hidden multipliers are costs that repeat or compound quietly:
+  - System prompts are sent with every request.
+  - RAG context can add thousands of tokens.
+  - Retries mean paying for the same work twice or more.
+  - Chat history grows linearly as conversations get longer.
+- The same prompt can have a dramatically different cost depending on the model, with the course material emphasizing up to a `200x` gap.
+- Use a task-model matrix to match model quality to task difficulty:
+  - Classification: use smaller models such as Haiku or mini models.
+  - Simple extraction: use smaller models when they perform well enough.
+  - Simple Q&A and summarization: prefer cheaper models unless quality requires an upgrade.
+  - Complex reasoning: use stronger models such as Sonnet or GPT-4-class models.
+  - Code generation: test both cheaper and stronger models; paying more can be justified when quality matters.
+- Intelligent model routing selects the most cost-effective model for each task instead of sending every request to the same expensive model.
+- A router can use task type and complexity to choose among cheap, mid-tier, and strong models.
+- For code generation, a useful pattern is to start cheaper and upgrade only when needed.
+- For complex reasoning, analysis, and creative tasks, route to stronger models that reliably produce better results.
+- Model selection is one of the highest-leverage LLM cost optimizations.
+
+## 3. LangFuse as Obswervability Platform
 
