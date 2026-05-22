@@ -1954,13 +1954,769 @@ if __name__ == "__main__":
 
 ### Overview
 
+![Cost Optimization](./assets/cost_optimization.png)
+
+- This section focuses on cost optimization strategies that work in real LLM systems:
+  - Prompt optimization to reduce unnecessary input/output tokens.
+  - Semantic caching to avoid redundant model calls.
+  - Smart model routing to send each task to the cheapest model that can handle it.
+- Approximate savings and effort:
+  - **Prompt optimization**: `30-50%` savings, low effort.
+  - **Semantic caching**: `30-50%` savings, medium effort.
+  - **Smart model routing**: `50-70%` savings, medium effort.
+  - **Combined strategy**: `70-85%` savings, medium effort.
+- Recommended implementation order:
+  - Start with prompt optimization because it is free and requires no infrastructure.
+  - Add caching for common or repeated queries so the system avoids unnecessary generation calls.
+  - Add routing for mixed workloads so simple tasks use cheaper models.
+  - Monitor and iterate continuously with Langfuse to verify whether caching, routing, and prompt changes are actually working.
+- Prompt optimization is about prompt quality, not prompt length:
+  - Bloated prompts often repeat obvious instructions such as "as an AI assistant."
+  - A verbose prompt can be reduced from about `89` tokens to about `13` tokens.
+  - That example is an `85%` prompt-token reduction and can contribute to `30-50%` total cost reduction.
+- Semantic caching matches queries by meaning, not exact text:
+  - "What's your return policy?" and "How do I return something?" are different strings but similar intents.
+  - Similarity-based caching can produce `30-50%` cache hit rates in production.
+  - A typical similarity threshold is around `0.92`.
+  - A typical TTL is around `24` hours for many use cases.
+- Smart model routing is high leverage:
+  - Many systems can route `70-80%` of requests to cheaper models.
+  - Route by task type (using a cheap model): classification, extraction, and simple requests often do not need premium models.
+  - Start with the cheapest acceptable model and upgrade only when quality suffers.
+  - Use A/B testing and observed quality/cost data to tune routing thresholds.
+- The goal is a workflow that optimizes prompt shape, caching behavior, and model choice automatically while Langfuse tracks cost, quality, and performance.
+
+Notebook: [`lab/06_cost_optimization.ipynb`](./lab/06_cost_optimization.ipynb). This notebook contains the code of the following sections, which is also available in separate file:
+
+- [`lab/udemy-langfuse/prompt_optimization.py`](./lab/udemy-langfuse/prompt_optimization.py)
+- [`lab/udemy-langfuse/semantic_cache.py`](./lab/udemy-langfuse/semantic_cache.py)
+- [`lab/udemy-langfuse/model_routing.py`](./lab/udemy-langfuse/model_routing.py)
+
 ### Prompt Optimization
+
+File: [`lab/udemy-langfuse/prompt_optimization.py`](./lab/udemy-langfuse/prompt_optimization.py).
+
+- Prompt optimization removes obvious bloat before requests reach the LLM.
+- The goal is not to make prompts vague; it is to keep only instructions that affect output quality.
+- Common filler phrases often add tokens without adding value, for example:
+  - `I want you to`
+  - `You are a highly intelligent`
+  - `Please note that`
+  - `It's important to remember that`
+  - `In your response, make sure to`
+  - `As an AI assistant,`
+- The helper also collapses excessive whitespace and removes repeated sentence-level instructions.
+- Manual review is still the real optimization step; the helper catches obvious mechanical bloat only.
+- Useful review questions:
+  - Does the model actually need this instruction?
+  - Can the same instruction be said in fewer words?
+  - Is this repeated elsewhere in the prompt?
+  - Am I sending context the model will not use?
+- The updated helper records before/after prompt size, estimated tokens, and estimated reduction percentage in Langfuse with `@observe(..., as_type="span")`.
+
+```python
+import re
+
+from dotenv import load_dotenv
+from langfuse import get_client, observe
+
+load_dotenv()
+
+langfuse = get_client()
+
+# Common phrases that usually add tokens without adding useful instruction.
+FILLER_PHRASES = [
+    "I want you to",
+    "You are a highly intelligent",
+    "Please note that",
+    "It's important to remember that",
+    "In your response, make sure to",
+    "As an AI assistant,",
+]
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate token count without adding tokenizer dependencies."""
+    return max(1, round(len(text) / 4)) if text else 0
+
+
+@observe(name="optimize_prompt", as_type="span")
+def optimize_prompt(prompt: str) -> str:
+    """Remove obvious prompt bloat while preserving unique instructions.
+
+    This is not a replacement for manual prompt review; it only catches common
+    filler phrases, excess whitespace, and repeated sentence-level instructions.
+    """
+    original_prompt = prompt
+
+    # Remove common filler phrases with case-insensitive matching.
+    optimized = prompt
+    for filler in FILLER_PHRASES:
+        optimized = re.sub(re.escape(filler), "", optimized, flags=re.IGNORECASE)
+
+    # Collapse repeated whitespace introduced by removals.
+    optimized = " ".join(optimized.split())
+
+    # Remove repeated sentence-level instructions while preserving order.
+    sentences = re.split(r"(?<=[.!?])\s+", optimized)
+    seen: set[str] = set()
+    unique_sentences: list[str] = []
+    for sentence in sentences:
+        normalized = sentence.strip().lower()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique_sentences.append(sentence.strip())
+
+    optimized = " ".join(unique_sentences)
+
+    original_tokens = estimate_tokens(original_prompt)
+    optimized_tokens = estimate_tokens(optimized)
+    reduction_pct = (
+        ((original_tokens - optimized_tokens) / original_tokens) * 100
+        if original_tokens
+        else 0.0
+    )
+
+    # Record the optimization metrics in the current Langfuse span.
+    langfuse.update_current_span(
+        input={"prompt": original_prompt},
+        output={"optimized_prompt": optimized},
+        metadata={
+            "original_chars": len(original_prompt),
+            "optimized_chars": len(optimized),
+            "estimated_original_tokens": original_tokens,
+            "estimated_optimized_tokens": optimized_tokens,
+            "estimated_token_reduction_pct": round(reduction_pct, 2),
+            "fillers_checked": FILLER_PHRASES,
+        },
+    )
+
+    return optimized
+
+
+if __name__ == "__main__":
+    bloated_prompt = """
+    As an AI assistant, I want you to explain observability.
+    Please note that it's important to remember that in your response, make sure to be accurate.
+    In your response, make sure to be accurate.
+    Be concise.
+    """
+
+    optimized_prompt = optimize_prompt(bloated_prompt)
+    print("Original:")
+    print(bloated_prompt.strip())
+    print("\nOptimized:")
+    print(optimized_prompt)
+
+    # Flush in short-lived scripts so the span is sent to Langfuse.
+    langfuse.flush()
+```
 
 ### Semantic Caching
 
+File: [`lab/udemy-langfuse/semantic_cache.py`](./lab/udemy-langfuse/semantic_cache.py).
+
+- Semantic caching is a major cost lever because repeated or similar user questions can reuse previous answers instead of calling the LLM again.
+- It matches by meaning, not exact text:
+  - `What's your return policy?`
+  - `How do I return something?`
+  - These are different strings but can map to the same cached answer.
+- The cache stores query embeddings and responses in a persistent ChromaDB collection so cache entries survive across script runs.
+- `all-MiniLM-L6-v2` creates small local embeddings for cache lookup.
+- A similarity threshold decides whether a query is close enough to reuse a cached answer.
+  - The overview used `0.92` as a typical production threshold.
+  - The demo uses `0.85` to make semantic matches easier to see.
+- A TTL prevents stale answers from being reused; the default is `24` hours.
+- Cache flow:
+  - Embed the incoming query.
+  - Search the vector cache for the closest previous query.
+  - Convert cosine distance to similarity.
+  - Reject the cache entry if it is below threshold or expired.
+  - Return the cached response on hit, or call Claude and store the response on miss.
+- The simulation groups semantically similar questions about Python list comprehensions, supervised vs. unsupervised learning, and REST APIs.
+- First runs usually produce misses; later runs can hit the persistent cache and avoid API calls.
+- In production, semantic caching commonly targets `30-50%` cache hit rates and corresponding cost reduction for repeated query patterns.
+- Langfuse traces cache lookup, cache set, LLM calls, hit/miss status, similarity score, TTL age, and saved API calls.
+
+```python
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import anthropic
+import chromadb
+from dotenv import load_dotenv
+from langfuse import get_client, observe
+from sentence_transformers import SentenceTransformer
+
+load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
+CACHE_DIR = BASE_DIR / "chroma_cache_db"
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+GENERATION_MODEL = "claude-sonnet-4-20250514"
+
+anthropic_client = anthropic.Anthropic()
+langfuse = get_client()
+
+
+@dataclass
+class CacheLookup:
+    """Result returned by the semantic cache lookup."""
+
+    response: str
+    similarity: float
+    cached_query: str
+    age_seconds: float
+
+
+@observe(name="call_claude_for_cache_miss", as_type="generation")
+def call_claude(query: str) -> str:
+    """Call Claude only when the semantic cache misses."""
+    response = anthropic_client.messages.create(
+        model=GENERATION_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": query}],
+    )
+    response_text = response.content[0].text
+
+    langfuse.update_current_generation(
+        model=GENERATION_MODEL,
+        input=[{"role": "user", "content": query}],
+        output=response_text,
+        usage_details={
+            "input": response.usage.input_tokens,
+            "output": response.usage.output_tokens,
+            "total": response.usage.input_tokens + response.usage.output_tokens,
+        },
+        metadata={"cache_hit": False},
+    )
+    return response_text
+
+
+class SemanticCache:
+    """Persistent ChromaDB-backed semantic response cache."""
+
+    def __init__(
+        self,
+        similarity_threshold: float = 0.92,
+        ttl_hours: int = 24,
+        persist_directory: str | Path = CACHE_DIR,
+    ) -> None:
+        self.client = chromadb.PersistentClient(path=str(persist_directory))
+        self.collection = self.client.get_or_create_collection(
+            name="llm_cache",
+            metadata={"hnsw:space": "cosine"},
+        )
+        self.encoder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        self.threshold = similarity_threshold
+        self.ttl = timedelta(hours=ttl_hours)
+
+    def _get_embedding(self, text: str) -> list[float]:
+        return self.encoder.encode(text).tolist()
+
+    def _is_expired(self, timestamp: str) -> tuple[bool, float]:
+        cached_time = datetime.fromisoformat(timestamp)
+        if cached_time.tzinfo is None:
+            cached_time = cached_time.replace(tzinfo=timezone.utc)
+
+        age = datetime.now(timezone.utc) - cached_time
+        return age > self.ttl, age.total_seconds()
+
+    @observe(name="semantic_cache_get", as_type="retriever")
+    def get(self, query: str) -> CacheLookup | None:
+        """Return a cached response when a semantically similar query exists."""
+        query_embedding = self._get_embedding(query)
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=1,
+            include=["documents", "metadatas", "distances"],
+        )
+
+        documents = results.get("documents") or [[]]
+        metadatas = results.get("metadatas") or [[]]
+        distances = results.get("distances") or [[]]
+
+        if not documents[0]:
+            langfuse.update_current_span(
+                output={"cache_hit": False},
+                metadata={"reason": "empty_cache", "threshold": self.threshold},
+            )
+            return None
+
+        distance = distances[0][0]
+        similarity = 1 - distance
+        metadata = metadatas[0][0]
+        expired, age_seconds = self._is_expired(metadata["timestamp"])
+
+        if similarity < self.threshold:
+            langfuse.update_current_span(
+                output={"cache_hit": False},
+                metadata={
+                    "reason": "below_threshold",
+                    "similarity": similarity,
+                    "threshold": self.threshold,
+                    "cached_query": documents[0][0],
+                },
+            )
+            return None
+
+        if expired:
+            langfuse.update_current_span(
+                output={"cache_hit": False},
+                metadata={
+                    "reason": "expired",
+                    "similarity": similarity,
+                    "ttl_hours": self.ttl.total_seconds() / 3600,
+                    "age_seconds": age_seconds,
+                    "cached_query": documents[0][0],
+                },
+            )
+            return None
+
+        cached_response = json.loads(metadata["response"])
+        lookup = CacheLookup(
+            response=cached_response,
+            similarity=similarity,
+            cached_query=documents[0][0],
+            age_seconds=age_seconds,
+        )
+
+        langfuse.update_current_span(
+            output={
+                "cache_hit": True,
+                "cached_query": lookup.cached_query,
+                "response_preview": lookup.response[:240],
+            },
+            metadata={
+                "similarity": lookup.similarity,
+                "threshold": self.threshold,
+                "age_seconds": lookup.age_seconds,
+            },
+        )
+        return lookup
+
+    @observe(name="semantic_cache_set", as_type="embedding")
+    def set(
+        self,
+        query: str,
+        response: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Store a query embedding and response for future semantic matches."""
+        query_embedding = self._get_embedding(query)
+        doc_id = hashlib.sha256(query.encode("utf-8")).hexdigest()
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        self.collection.upsert(
+            ids=[doc_id],
+            embeddings=[query_embedding],
+            documents=[query],
+            metadatas=[
+                {
+                    "response": json.dumps(response),
+                    "timestamp": timestamp,
+                    **(metadata or {}),
+                }
+            ],
+        )
+
+        langfuse.update_current_span(
+            output={"cached": True, "doc_id": doc_id},
+            metadata={
+                "query_length": len(query),
+                "embedding_model": EMBEDDING_MODEL_NAME,
+                "embedding_dim": len(query_embedding),
+                "timestamp": timestamp,
+            },
+        )
+
+
+cache = SemanticCache(similarity_threshold=0.85)
+
+
+@observe(name="cached_llm_call", as_type="span")
+def cached_llm_call(query: str) -> str:
+    """Check semantic cache before calling the LLM."""
+    cached = cache.get(query)
+    if cached:
+        langfuse.update_current_span(
+            output={"response": cached.response},
+            metadata={
+                "cache_hit": True,
+                "similarity": cached.similarity,
+                "cached_query": cached.cached_query,
+                "api_call_saved": True,
+            },
+        )
+        print(f"  CACHE HIT - similarity: {cached.similarity:.2%}")
+        return cached.response
+
+    print("  CACHE MISS - calling Claude API")
+    response = call_claude(query)
+    cache.set(query, response, metadata={"source": "claude"})
+
+    langfuse.update_current_span(
+        output={"response": response},
+        metadata={"cache_hit": False, "api_call_saved": False},
+    )
+    return response
+
+
+@observe(name="simulate_semantic_cache", as_type="span")
+def simulate_semantic_cache() -> dict[str, float | int]:
+    """Demonstrate semantic cache hits with similar questions."""
+    question_groups = [
+        {
+            "topic": "Python Programming",
+            "questions": [
+                "What is a Python list comprehension?",
+                "Explain list comprehensions in Python",
+                "How do list comprehensions work in Python?",
+                "What are Python list comprehensions and how to use them?",
+            ],
+        },
+        {
+            "topic": "Machine Learning",
+            "questions": [
+                "What is the difference between supervised and unsupervised learning?",
+                "Explain supervised vs unsupervised machine learning",
+                "How does supervised learning differ from unsupervised learning?",
+                "Compare supervised and unsupervised learning in ML",
+            ],
+        },
+        {
+            "topic": "API Concepts",
+            "questions": [
+                "What is a REST API?",
+                "Explain what REST APIs are",
+                "What does REST API mean?",
+                "Can you describe what a RESTful API is?",
+            ],
+        },
+    ]
+
+    total_queries = 0
+    cache_hits = 0
+    cache_misses = 0
+
+    for group in question_groups:
+        print(f"\nTopic: {group['topic']}")
+        for question in group["questions"]:
+            total_queries += 1
+            print(f'Query {total_queries}: "{question}"')
+
+            before = cache.get(question)
+            if before:
+                cache_hits += 1
+            else:
+                cache_misses += 1
+
+            response = cached_llm_call(question)
+            display_response = response[:120] + "..." if len(response) > 120 else response
+            print(f"  Response: {display_response}")
+
+    hit_rate = (cache_hits / total_queries * 100) if total_queries else 0.0
+    summary = {
+        "total_queries": total_queries,
+        "cache_hits": cache_hits,
+        "cache_misses": cache_misses,
+        "hit_rate_pct": round(hit_rate, 2),
+        "api_calls_saved": cache_hits,
+    }
+
+    langfuse.update_current_span(output=summary, metadata=summary)
+
+    print("\nCache performance summary")
+    for key, value in summary.items():
+        print(f"  {key}: {value}")
+
+    return summary
+
+
+if __name__ == "__main__":
+    simulate_semantic_cache()
+
+    # Flush in short-lived scripts so spans are sent to Langfuse.
+    langfuse.flush()
+```
+
+![Semantic Cache Example](./assets/semantic_cache_example.png)
+
 ### Smart Model Routing
 
+File: [`lab/udemy-langfuse/model_routing.py`](./lab/udemy-langfuse/model_routing.py).
+
+Smart routing automatically selects the cheapest model that should be able to handle each request.
+
+- Define task classes with an enum: `SIMPLE` for yes/no or classification, `MODERATE` for summarization or extraction, `COMPLEX` for analysis and reasoning, `CODE` for programming tasks, and `CREATIVE` for writing tasks.
+- Map each task type to a preferred model tier; the mapping can be expanded with more providers or domain-specific models.
+- Classify prompts with simple regex patterns: yes/no and classification terms route to simple models, programming verbs and language names route to code models, reasoning terms route to complex models, and story/poem/blog language routes to creative models.
+- Keep an `override_model` option for cases where business rules, evaluation results, or user preferences should bypass automatic routing.
+- Trace both levels in Langfuse: the outer router span stores the detected task type, selected model, provider, token counts, estimated cost, and latency; the provider call is recorded as a generation.
+- In the Langfuse UI, the metadata shows why a request was routed to a model, for example a simple yes/no prompt to Haiku and a Python coding prompt to Sonnet.
+- This saves cost by avoiding expensive models for small tasks while still routing code or reasoning prompts to stronger models.
+
+```python
+import re
+import time
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
+
+from anthropic import Anthropic
+from dotenv import load_dotenv
+from langfuse import get_client, observe
+from openai import OpenAI
+
+load_dotenv()
+
+
+class TaskType(Enum):
+    SIMPLE = "simple"  # Yes/no answers and basic classification.
+    MODERATE = "moderate"  # Summarization and information extraction.
+    COMPLEX = "complex"  # Analysis, comparison, and reasoning.
+    CODE = "code"  # Code generation or debugging.
+    CREATIVE = "creative"  # Creative writing tasks.
+
+
+@dataclass
+class ModelCallResult:
+    """Normalized response data across Anthropic and OpenAI calls."""
+
+    content: str
+    provider: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    estimated_cost: float
+    duration_ms: float
+
+
+PRICING = {
+    # Prices are USD per 1M tokens; keep this table aligned with vendor pricing pages.
+    "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
+    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+    "gpt-4o": {"input": 2.50, "output": 10.00},
+}
+
+
+class ModelRouter:
+    """Route requests to the lowest-cost model that should handle the task."""
+
+    MODELS = {
+        TaskType.SIMPLE: "claude-haiku-4-5-20251001",
+        TaskType.MODERATE: "gpt-4o-mini",
+        TaskType.CODE: "claude-sonnet-4-6",
+        TaskType.COMPLEX: "claude-sonnet-4-6",
+        TaskType.CREATIVE: "gpt-4o",
+    }
+
+    def classify_task(self, prompt: str) -> TaskType:
+        """Classify a prompt with simple, explainable keyword patterns."""
+
+        prompt_lower = prompt.lower()
+
+        simple_patterns = [
+            r"\b(yes or no)\b",
+            r"\b(true or false)\b",
+            r"\b(classify|categorize)\b",
+            r"^is (this|it|the)",
+            r"\b(which one|choose|select)\b",
+        ]
+        if any(re.search(pattern, prompt_lower) for pattern in simple_patterns):
+            return TaskType.SIMPLE
+
+        code_patterns = [
+            r"\b(write|create|generate|fix|debug).*(code|function|class|script)\b",
+            r"\b(python|javascript|typescript|java|rust)\b",
+            r"```",
+        ]
+        if any(re.search(pattern, prompt_lower) for pattern in code_patterns):
+            return TaskType.CODE
+
+        complex_patterns = [
+            r"\b(analyze|evaluate|compare|critique)\b",
+            r"\b(why|how).*(work|happen|cause)\b",
+            r"\b(pros and cons|trade-?offs)\b",
+            r"\b(explain.*(detail|depth))\b",
+        ]
+        if any(re.search(pattern, prompt_lower) for pattern in complex_patterns):
+            return TaskType.COMPLEX
+
+        creative_patterns = [
+            r"\b(write|create|compose).*(story|poem|essay|blog)\b",
+            r"\b(creative|imaginative|original)\b",
+        ]
+        if any(re.search(pattern, prompt_lower) for pattern in creative_patterns):
+            return TaskType.CREATIVE
+
+        return TaskType.MODERATE
+
+    def route(self, prompt: str, override_model: Optional[str] = None) -> str:
+        """Return an explicit override or the model mapped to the detected task."""
+
+        if override_model:
+            return override_model
+
+        task_type = self.classify_task(prompt)
+        return self.MODELS[task_type]
+
+
+langfuse = get_client()
+router = ModelRouter()
+anthropic_client = Anthropic()
+openai_client = OpenAI()
+
+
+def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Estimate provider cost from the local pricing table."""
+
+    pricing = PRICING.get(model, {"input": 0.0, "output": 0.0})
+    return (
+        input_tokens * pricing["input"] / 1_000_000
+        + output_tokens * pricing["output"] / 1_000_000
+    )
+
+
+@observe(name="call_claude_routed", as_type="generation")
+def call_claude(prompt: str, model: str, max_tokens: int = 1024) -> ModelCallResult:
+    """Call Anthropic and record the provider request as a Langfuse generation."""
+
+    start = time.perf_counter()
+    response = anthropic_client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    content = response.content[0].text
+    input_tokens = response.usage.input_tokens
+    output_tokens = response.usage.output_tokens
+    total_tokens = input_tokens + output_tokens
+    cost = estimate_cost(model, input_tokens, output_tokens)
+    duration_ms = (time.perf_counter() - start) * 1000
+
+    langfuse.update_current_generation(
+        model=model,
+        input=[{"role": "user", "content": prompt}],
+        output=content,
+        usage_details={
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": total_tokens,
+        },
+        cost_details={"total": cost},
+        metadata={"provider": "anthropic", "duration_ms": duration_ms},
+    )
+
+    return ModelCallResult(
+        content=content,
+        provider="anthropic",
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        estimated_cost=cost,
+        duration_ms=duration_ms,
+    )
+
+
+@observe(name="call_openai_routed", as_type="generation")
+def call_openai(prompt: str, model: str) -> ModelCallResult:
+    """Call OpenAI and record the provider request as a Langfuse generation."""
+
+    start = time.perf_counter()
+    response = openai_client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    content = response.choices[0].message.content or ""
+    input_tokens = response.usage.prompt_tokens if response.usage else 0
+    output_tokens = response.usage.completion_tokens if response.usage else 0
+    total_tokens = response.usage.total_tokens if response.usage else 0
+    cost = estimate_cost(model, input_tokens, output_tokens)
+    duration_ms = (time.perf_counter() - start) * 1000
+
+    langfuse.update_current_generation(
+        model=model,
+        input=[{"role": "user", "content": prompt}],
+        output=content,
+        usage_details={
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": total_tokens,
+        },
+        cost_details={"total": cost},
+        metadata={"provider": "openai", "duration_ms": duration_ms},
+    )
+
+    return ModelCallResult(
+        content=content,
+        provider="openai",
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        estimated_cost=cost,
+        duration_ms=duration_ms,
+    )
+
+
+@observe(name="routed_llm_call", as_type="span")
+def routed_llm_call(prompt: str, override_model: Optional[str] = None) -> str:
+    """Classify the prompt, route it, call the provider, and trace the decision."""
+
+    task_type = router.classify_task(prompt)
+    selected_model = router.route(prompt, override_model)
+
+    if selected_model.startswith("claude"):
+        result = call_claude(prompt, model=selected_model)
+    else:
+        result = call_openai(prompt, model=selected_model)
+
+    langfuse.update_current_span(
+        input={"prompt": prompt, "override_model": override_model},
+        output={"content": result.content},
+        metadata={
+            "task_type": task_type.value,
+            "routed_model": selected_model,
+            "override_used": override_model is not None,
+            "provider": result.provider,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "total_tokens": result.total_tokens,
+            "estimated_cost": result.estimated_cost,
+            "duration_ms": result.duration_ms,
+        },
+    )
+
+    return result.content
+
+
+if __name__ == "__main__":
+    examples = [
+        "Is 2 + 2 = 4? Yes or no",
+        "Write a Python function to sort a list",
+    ]
+
+    for prompt in examples:
+        print(f"\nPrompt: {prompt}")
+        print(routed_llm_call(prompt))
+
+    langfuse.flush()
+```
+
+
 ## 6. Monitoring, Alerting, and Debugging
+
+![Alerts](./assets/alerts.png)
 
 ## 7. Production Patterns and Security
 
