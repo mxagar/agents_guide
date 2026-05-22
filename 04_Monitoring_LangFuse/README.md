@@ -49,6 +49,7 @@ Table of Contents:
     - [Semantic Caching](#semantic-caching)
     - [Smart Model Routing](#smart-model-routing)
   - [6. Monitoring, Alerting, and Debugging](#6-monitoring-alerting-and-debugging)
+    - [Local Webhook Server](#local-webhook-server)
   - [7. Production Patterns and Security](#7-production-patterns-and-security)
 
 ## 1. Introduction to LangFuse
@@ -2718,5 +2719,394 @@ if __name__ == "__main__":
 
 ![Alerts](./assets/alerts.png)
 
+File: [`lab/udemy-langfuse/alert_webhook.py`](./lab/udemy-langfuse/alert_webhook.py)
+
+- Alerts should tell the team about production issues before users notice them, but noisy alerts quickly become ignored.
+- Useful alert types include:
+  - **Daily spend exceeded**: trigger around `120%` of the average daily spend; high priority.
+  - **Single request cost spike**: trigger when one request exceeds a cost threshold, for example `$1`; high priority.
+  - **Error rate**: trigger when errors exceed a threshold such as `5%`; critical priority.
+  - **Quality threshold**: trigger when eval or feedback scores fall below acceptable levels; critical priority.
+  - **Latency p95**: trigger when p95 latency exceeds a target such as `10s`; medium priority.
+- Debugging with traces gives full request visibility so bottlenecks can be found quickly:
+  - Slow retrieval spans show where latency is introduced.
+  - Retrieval metadata can reveal excessive chunk counts, such as retrieving `50` chunks when fewer are enough.
+  - Retrieved documents and model inputs help identify hallucination sources and bad indexed content.
+- Dashboards should cover three core dimensions:
+  - **Cost**: cost by model, feature, user, and trend over time.
+  - **Performance**: p50/p95/p99 latency, errors, and cache hit rates.
+  - **Quality**: eval scores, hallucination rate, and user feedback.
+- Webhooks connect monitoring to action: when a threshold is crossed, the app sends a structured payload to a receiver such as webhook.site, Slack, Discord, PagerDuty, Opsgenie, or an internal API.
+- The example below simulates hourly LLM spend and sends a webhook alert when the configured threshold is exceeded.
+- The webhook URL is read from `ALERT_WEBHOOK_URL` instead of being hardcoded, and the alert check itself is traced in Langfuse.
+
+```python
+"""Send a webhook alert when a simulated LLM cost threshold is exceeded."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
+
+import requests
+from dotenv import load_dotenv
+from langfuse import get_client, observe
+
+load_dotenv()
+
+langfuse = get_client()
+
+
+@dataclass
+class CostAlert:
+    """Payload sent to the alert webhook."""
+
+    text: str
+    timestamp: str
+    alert_type: str
+    details: dict[str, str]
+
+
+def get_required_webhook_url() -> str:
+    """Read the webhook URL from the environment instead of hardcoding secrets."""
+
+    webhook_url = os.getenv("ALERT_WEBHOOK_URL")
+    if not webhook_url:
+        raise RuntimeError(
+            "Set ALERT_WEBHOOK_URL to a webhook.site, Slack, PagerDuty, "
+            "or local ngrok webhook endpoint."
+        )
+    return webhook_url
+
+
+def build_cost_alert(hourly_cost: float, threshold: float) -> CostAlert:
+    """Create a structured alert payload that any webhook receiver can parse."""
+
+    overage = hourly_cost - threshold
+    return CostAlert(
+        text=f"Cost Alert: ${hourly_cost:.2f} spent in the last hour",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        alert_type="cost_spike",
+        details={
+            "hourly_cost": f"${hourly_cost:.2f}",
+            "threshold": f"${threshold:.2f}",
+            "overage": f"${overage:.2f}",
+            "dashboard": os.getenv("LANGFUSE_DASHBOARD_URL", "https://cloud.langfuse.com"),
+        },
+    )
+
+
+@observe(name="send_alert_webhook", as_type="span")
+def send_alert_webhook(alert: CostAlert, webhook_url: str) -> requests.Response:
+    """Send the alert and record the delivery status in Langfuse."""
+
+    response = requests.post(webhook_url, json=asdict(alert), timeout=10)
+
+    langfuse.update_current_span(
+        input={"webhook_url_configured": bool(webhook_url), "alert": asdict(alert)},
+        output={"status_code": response.status_code, "ok": response.ok},
+        metadata={
+            "alert_type": alert.alert_type,
+            "delivery_target": webhook_url.split("?")[0],
+        },
+    )
+
+    response.raise_for_status()
+    return response
+
+
+@observe(name="check_costs_and_alert", as_type="span")
+def check_costs_and_alert(
+    hourly_cost: float | None = None,
+    threshold: float | None = None,
+    webhook_url: str | None = None,
+) -> bool:
+    """Monitor LLM costs and send an alert when the threshold is exceeded."""
+
+    hourly_cost = hourly_cost or float(os.getenv("SIMULATED_HOURLY_COST", "15.50"))
+    threshold = threshold or float(os.getenv("ALERT_COST_THRESHOLD", "10.00"))
+
+    print(f"Current hourly cost: ${hourly_cost:.2f}")
+    print(f"Threshold: ${threshold:.2f}")
+
+    should_alert = hourly_cost > threshold
+
+    langfuse.update_current_span(
+        input={"hourly_cost": hourly_cost, "threshold": threshold},
+        metadata={
+            "alert_type": "cost_spike",
+            "should_alert": should_alert,
+            "overage": max(hourly_cost - threshold, 0.0),
+        },
+    )
+
+    if not should_alert:
+        print("Costs are within budget. No alert needed.")
+        langfuse.update_current_span(output={"alert_sent": False})
+        return False
+
+    print("Cost spike detected. Sending alert.")
+    alert = build_cost_alert(hourly_cost, threshold)
+    response = send_alert_webhook(alert, webhook_url or get_required_webhook_url())
+
+    print(f"Alert sent. Webhook status: {response.status_code}")
+    langfuse.update_current_span(output={"alert_sent": True, "status_code": response.status_code})
+    return True
+
+
+if __name__ == "__main__":
+    try:
+        check_costs_and_alert()
+    finally:
+        langfuse.flush()
+```
+
+### Local Webhook Server
+
+Use webhook.site for a quick external test, or run a small local receiver when you want to inspect and control the alert handling code yourself.
+
+1. Install the local server dependencies:
+
+```bash
+pip install fastapi uvicorn ngrok
+```
+
+2. Create a simple receiver, for example `local_alert_receiver.py`:
+
+```python
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+received_alerts: list[dict[str, Any]] = []
+
+
+@app.post("/langfuse-alert")
+async def receive_langfuse_alert(request: Request) -> dict[str, Any]:
+    payload = await request.json()
+    received_alerts.append(
+        {
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "payload": payload,
+        }
+    )
+    print("Received alert:", payload)
+    return {"ok": True, "received": payload.get("alert_type")}
+
+
+@app.get("/alerts")
+def list_alerts() -> list[dict[str, Any]]:
+    return received_alerts
+```
+
+3. Start the FastAPI server:
+
+```bash
+uvicorn local_alert_receiver:app --reload --port 8000
+```
+
+4. In a second terminal, expose it with ngrok:
+
+```bash
+ngrok http 8000
+```
+
+5. Copy the ngrok HTTPS forwarding URL and point the alert script at the FastAPI route:
+
+```bash
+set ALERT_WEBHOOK_URL=https://YOUR-NGROK-DOMAIN.ngrok-free.app/langfuse-alert
+python alert_webhook.py
+```
+
+On PowerShell, use:
+
+```powershell
+$env:ALERT_WEBHOOK_URL = "https://YOUR-NGROK-DOMAIN.ngrok-free.app/langfuse-alert"
+python .\alert_webhook.py
+```
+
+The alert script does not need structural changes for local FastAPI + ngrok because it already posts JSON to `ALERT_WEBHOOK_URL`. Only the target URL changes. If the local receiver expects a different payload shape, change `build_cost_alert()` to match that contract, for example:
+
+```python
+def build_cost_alert(hourly_cost: float, threshold: float) -> CostAlert:
+    return CostAlert(
+        text=f"Cost Alert: ${hourly_cost:.2f} spent in the last hour",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        alert_type="cost_spike",
+        details={
+            "metric": "llm_hourly_cost",
+            "value": f"{hourly_cost:.2f}",
+            "threshold": f"{threshold:.2f}",
+            "severity": "high",
+            "dashboard_url": os.getenv("LANGFUSE_DASHBOARD_URL", "https://cloud.langfuse.com"),
+        },
+    )
+```
+
 ## 7. Production Patterns and Security
 
+File: [`lab/udemy-langfuse/pii_redaction.py`](./lab/udemy-langfuse/pii_redaction.py)
+
+- Before shipping LLM observability to production, treat prompts and responses as sensitive logs.
+- PII means personally identifiable information: data that can identify a person directly or when combined with other data.
+- Examples include names with zip codes, birthday with gender, email addresses, IP addresses, browsing history, phone numbers, health data, financial data, SSNs, and credit card numbers.
+- LLM observability can accidentally capture PII because prompts and responses often include user account details, support requests, private documents, or model outputs that repeat sensitive input.
+- Redact before logging, not after: once raw PII is stored in traces, it becomes a security and compliance problem.
+- Disable automatic Langfuse input/output capture for sensitive spans and generations with `capture_input=False` and `capture_output=False`.
+- Manually log only redacted inputs and outputs with `update_current_span()` and `update_current_generation()`.
+- Track redaction metadata, such as which PII types were removed and how many matches were found, without storing the original sensitive values.
+- The example redacts common patterns: email, phone number, SSN, credit card number, and IP address.
+- The recursive redaction helper also handles nested dictionaries, lists, and tuples for structured payloads.
+- Regex redaction is a good starting point, but production systems should combine it with stricter data minimization, access control, retention policies, audits, and possibly specialized PII detection tools.
+
+```python
+"""PII redaction for Langfuse observability."""
+
+from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass
+from typing import Any
+
+import anthropic
+from dotenv import load_dotenv
+from langfuse import get_client, observe
+
+load_dotenv()
+
+GENERATION_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
+langfuse = get_client()
+anthropic_client = anthropic.Anthropic()
+
+
+@dataclass
+class RedactionResult:
+    """Redacted text plus lightweight metadata for audit/debugging."""
+
+    text: str
+    redaction_counts: dict[str, int]
+
+
+class PIIRedactor:
+    """Redact common PII patterns before logging data to observability tools."""
+
+    PATTERNS = {
+        "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+        "phone": r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b",
+        "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
+        "credit_card": r"\b(?:\d{4}[-\s]?){3}\d{4}\b",
+        "ip_address": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+    }
+
+    def redact_with_counts(self, text: str) -> RedactionResult:
+        """Redact all known PII patterns and count what was removed."""
+
+        result = text
+        counts: dict[str, int] = {}
+
+        for pii_type, pattern in self.PATTERNS.items():
+            result, count = re.subn(
+                pattern,
+                f"[REDACTED_{pii_type.upper()}]",
+                result,
+            )
+            if count:
+                counts[pii_type] = count
+
+        return RedactionResult(text=result, redaction_counts=counts)
+
+    def redact(self, text: str) -> str:
+        """Return only the redacted text."""
+
+        return self.redact_with_counts(text).text
+
+    def redact_data(self, data: Any) -> Any:
+        """Recursively redact strings inside dicts and lists."""
+
+        if isinstance(data, str):
+            return self.redact(data)
+        if isinstance(data, dict):
+            return {key: self.redact_data(value) for key, value in data.items()}
+        if isinstance(data, list):
+            return [self.redact_data(value) for value in data]
+        if isinstance(data, tuple):
+            return tuple(self.redact_data(value) for value in data)
+        return data
+
+
+redactor = PIIRedactor()
+
+
+@observe(name="call_claude_secure", as_type="generation", capture_input=False, capture_output=False)
+def call_claude(prompt: str) -> str:
+    """Call Claude while logging only redacted prompt/response data."""
+
+    response = anthropic_client.messages.create(
+        model=GENERATION_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    response_text = response.content[0].text
+
+    redacted_prompt = redactor.redact_with_counts(prompt)
+    redacted_response = redactor.redact_with_counts(response_text)
+
+    langfuse.update_current_generation(
+        model=GENERATION_MODEL,
+        input=[{"role": "user", "content": redacted_prompt.text}],
+        output=redacted_response.text,
+        usage_details={
+            "input": response.usage.input_tokens,
+            "output": response.usage.output_tokens,
+            "total": response.usage.input_tokens + response.usage.output_tokens,
+        },
+        metadata={
+            "pii_redaction_enabled": True,
+            "input_redactions": redacted_prompt.redaction_counts,
+            "output_redactions": redacted_response.redaction_counts,
+        },
+    )
+
+    return response_text
+
+
+@observe(name="secure_llm_call", as_type="span", capture_input=False, capture_output=False)
+def secure_llm_call(prompt: str) -> str:
+    """Call an LLM while preventing raw PII from being stored in Langfuse."""
+
+    redacted_prompt = redactor.redact_with_counts(prompt)
+    response_text = call_claude(prompt)
+    redacted_response = redactor.redact_with_counts(response_text)
+
+    langfuse.update_current_span(
+        input={"prompt": redacted_prompt.text},
+        output={"response": redacted_response.text},
+        metadata={
+            "pii_redaction_enabled": True,
+            "input_redactions": redacted_prompt.redaction_counts,
+            "output_redactions": redacted_response.redaction_counts,
+        },
+    )
+
+    return response_text
+
+
+if __name__ == "__main__":
+    test_prompt = """
+    Please help me with my account. My email is john.doe@example.com,
+    my phone number is 555-123-4567, my SSN is 123-45-6789,
+    and my card number is 4242 4242 4242 4242.
+    """
+
+    try:
+        print("Testing PII redaction with an LLM call...")
+        result = secure_llm_call(test_prompt)
+        print(f"Response: {result}")
+    finally:
+        langfuse.flush()
+```
