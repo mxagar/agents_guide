@@ -39,6 +39,10 @@ Table of Contents:
       - [Decorator API Example](#decorator-api-example)
       - [Context Manager API Example](#context-manager-api-example)
       - [Low-Level API Example](#low-level-api-example)
+  - [4. Instrumenting LLM Applications with LangFuse](#4-instrumenting-llm-applications-with-langfuse)
+    - [LLM App for Production](#llm-app-for-production)
+    - [RAG Pipeline](#rag-pipeline)
+    - [LangChain Integration](#langchain-integration)
 
 ## 1. Introduction to LangFuse
 
@@ -928,6 +932,14 @@ print(completion.choices[0].message.content)
 - Low-level tracing provides (3rd code block) the most control but requires more code, including manually starting, updating, ending, and linking spans or generations.
 - Choose the API level based on how much automation vs. control the application needs.
 
+This section uses three scripts:
+
+- [`decorator_trace_llm.py`](./lab/udemy-langfuse/decorator_trace_llm.py) demonstrates the decorator-based API.
+- [`context_manager_trace_llm.py`](./lab/udemy-langfuse/context_manager_trace_llm.py) demonstrates the context manager API.
+- [`low_level_trace_llm.py`](./lab/udemy-langfuse/low_level_trace_llm.py) demonstrates the low-level API.
+
+Additionally, the notebook [`lab/02_langfuse_api_levels.ipynb`](./lab/02_langfuse_api_levels.ipynb) walks through all three API levels interactively, using the same code as in the scripts.
+
 #### Decorator API Example
 
 File: [`lab/udemy-langfuse/decorator_trace_llm.py`](./lab/udemy-langfuse/decorator_trace_llm.py)
@@ -1219,4 +1231,14 @@ print(f"Trace ID: {trace_id}")
 langfuse.flush()
 
 ```
+
+## 4. Instrumenting LLM Applications with LangFuse
+
+### LLM App for Production
+
+
+### RAG Pipeline
+
+
+### LangChain Integration
 
