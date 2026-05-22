@@ -36,6 +36,9 @@ Table of Contents:
       - [LangFuse Data Model](#langfuse-data-model)
     - [First LLM Trace with LangFuse with OpenAI Wrapper](#first-llm-trace-with-langfuse-with-openai-wrapper)
     - [LangFuse API Levels: Decorator, Context Manager, Low-Level, Drop-in](#langfuse-api-levels-decorator-context-manager-low-level-drop-in)
+      - [Decorator API Example](#decorator-api-example)
+      - [Context Manager API Example](#context-manager-api-example)
+      - [Low-Level API Example](#low-level-api-example)
 
 ## 1. Introduction to LangFuse
 
@@ -925,6 +928,8 @@ print(completion.choices[0].message.content)
 - Low-level tracing provides (3rd code block) the most control but requires more code, including manually starting, updating, ending, and linking spans or generations.
 - Choose the API level based on how much automation vs. control the application needs.
 
+#### Decorator API Example
+
 File: [`lab/udemy-langfuse/decorator_trace_llm.py`](./lab/udemy-langfuse/decorator_trace_llm.py)
 
 ```python
@@ -993,6 +998,8 @@ if __name__ == "__main__":
 ```
 
 ![Decorator Trace](./assets/decorator_trace.png)
+
+#### Context Manager API Example
 
 File: [`lab/udemy-langfuse/context_manager_trace_llm.py`](./lab/udemy-langfuse/context_manager_trace_llm.py).
 
@@ -1080,6 +1087,8 @@ print(f"{expression} = {result}")
 # Flush is important for short-lived scripts so buffered observations are sent.
 langfuse.flush()
 ```
+
+#### Low-Level API Example
 
 File: [`lab/udemy-langfuse/low_level_trace_llm.py`](./lab/udemy-langfuse/low_level_trace_llm.py).
 

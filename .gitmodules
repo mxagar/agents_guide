@@ -7,4 +7,4 @@
 	branch = 5-final
 [submodule "04_Monitoring_LangFuse/lab/udemy-langfuse"]
 	path = 04_Monitoring_LangFuse/lab/udemy-langfuse
-	url = https://github.com/pdichone/llm-observability-course.git
+	url = https://github.com/mxagar/llm-observability-course.git
