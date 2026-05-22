@@ -1236,9 +1236,928 @@ langfuse.flush()
 
 ### LLM App for Production
 
+Files:
+
+- [`lab/udemy-langfuse/instrumented_llm.py`](./lab/udemy-langfuse/instrumented_llm.py)
+- [`lab/03_langfuse_llm_production.ipynb`](./lab/03_langfuse_llm_production.ipynb)
+
+- The production wrapper normalizes responses from multiple providers into one `LLMResponse` dataclass.
+- Each response stores `content`, `input_tokens`, `output_tokens`, `model`, `duration_ms`, and estimated `cost`.
+- Pricing is kept in a model-to-price dictionary using per-1M-token input/output rates; update these values when provider pricing changes.
+- Provider calls are decorated as Langfuse **generations**, the right observation type for LLM calls because it can hold model, token, cost, latency, input, and output data.
+- `call_claude(...)` and `call_openai(...)` follow the same production pattern:
+  - Build the provider-specific request.
+  - Measure latency.
+  - Read token usage from the provider response.
+  - Estimate cost.
+  - Enrich the current Langfuse generation with model, input/output, usage, cost, and metadata.
+  - Return a normalized `LLMResponse`.
+- `compare_models(...)` wraps both provider calls in one observed span so the two generations appear as child observations in the same trace.
+- `propagate_attributes(...)` sets trace-level fields such as `user_id`, `session_id`, tags, metadata, and trace name so runs are easy to filter later.
+- In the Langfuse UI, this setup exposes latency per provider, total trace latency, token usage, estimated cost, inputs/outputs, structured metadata, trace IDs, user IDs, tags, logs, comments, and errors.
+- `langfuse.flush()` is required in notebooks and short-lived scripts so buffered observations are sent before the process exits.
+
+```python
+from dataclasses import asdict, dataclass
+import time
+from typing import Any
+
+from anthropic import Anthropic
+from dotenv import load_dotenv
+from langfuse import get_client, observe, propagate_attributes
+from openai import OpenAI
+
+load_dotenv()
+
+# Provider clients read their API keys from environment variables.
+anthropic_client = Anthropic()
+openai_client = OpenAI()
+
+# Langfuse reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, and LANGFUSE_BASE_URL.
+langfuse = get_client()
+
+
+@dataclass
+class LLMResponse:
+    """Normalized response shape used across providers."""
+
+    content: str
+    input_tokens: int
+    output_tokens: int
+    model: str
+    duration_ms: float
+    cost: float
+
+
+# Example standard prices per 1M tokens, last checked 2026-05-22.
+# This intentionally covers both the current course defaults and a few common
+# alternatives. It does not include prompt caching, batch, flex, priority, long
+# context, regional, or tool-specific pricing modifiers.
+PRICING: dict[str, dict[str, float]] = {
+    # Anthropic Claude API model IDs.
+    "claude-opus-4-1-20250805": {"input": 15.00, "output": 75.00},
+    "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
+    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
+    "claude-3-7-sonnet-20250219": {"input": 3.00, "output": 15.00},
+    "claude-3-5-haiku-20241022": {"input": 0.80, "output": 4.00},
+    "claude-3-haiku-20240307": {"input": 0.25, "output": 1.25},
+    # OpenAI standard short-context prices.
+    "gpt-5.5": {"input": 5.00, "output": 30.00},
+    "gpt-5.4": {"input": 2.50, "output": 15.00},
+    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
+    "gpt-5.4-nano": {"input": 0.20, "output": 1.25},
+    "gpt-4o": {"input": 2.50, "output": 10.00},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+}
+
+
+def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Calculate estimated cost from token usage."""
+    pricing = PRICING.get(model)
+    if pricing is None:
+        return 0.0
+
+    input_cost = (input_tokens / 1_000_000) * pricing["input"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output"]
+    return input_cost + output_cost
+
+
+@observe(name="call_claude", as_type="generation")
+def call_claude(
+    prompt: str,
+    model: str = "claude-sonnet-4-20250514",
+    system: str | None = None,
+    max_tokens: int = 1024,
+    metadata: dict[str, Any] | None = None,
+) -> LLMResponse:
+    """Call Claude and enrich the active Langfuse generation."""
+    start = time.perf_counter()
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system:
+        kwargs["system"] = system
+
+    response = anthropic_client.messages.create(**kwargs)
+
+    duration_ms = (time.perf_counter() - start) * 1000
+    input_tokens = response.usage.input_tokens
+    output_tokens = response.usage.output_tokens
+    cost = calculate_cost(model, input_tokens, output_tokens)
+    content = response.content[0].text
+
+    # Because this function is observed as a generation, model-specific fields
+    # belong on the current generation rather than generic span metadata.
+    langfuse.update_current_generation(
+        model=model,
+        input=[{"role": "user", "content": prompt}],
+        output=content,
+        usage_details={
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": input_tokens + output_tokens,
+        },
+        cost_details={"total": cost},
+        metadata={
+            **(metadata or {}),
+            "provider": "anthropic",
+            "duration_ms": duration_ms,
+            "stop_reason": response.stop_reason,
+        },
+    )
+
+    return LLMResponse(
+        content=content,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        model=model,
+        duration_ms=duration_ms,
+        cost=cost,
+    )
+
+
+@observe(name="call_openai", as_type="generation")
+def call_openai(
+    prompt: str,
+    model: str = "gpt-4o-mini",
+    system: str | None = None,
+    max_tokens: int = 1024,
+    metadata: dict[str, Any] | None = None,
+) -> LLMResponse:
+    """Call OpenAI and enrich the active Langfuse generation."""
+    start = time.perf_counter()
+
+    messages: list[dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    response = openai_client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=messages,
+    )
+
+    duration_ms = (time.perf_counter() - start) * 1000
+    input_tokens = response.usage.prompt_tokens
+    output_tokens = response.usage.completion_tokens
+    total_tokens = response.usage.total_tokens
+    cost = calculate_cost(model, input_tokens, output_tokens)
+    content = response.choices[0].message.content or ""
+
+    langfuse.update_current_generation(
+        model=model,
+        input=messages,
+        output=content,
+        usage_details={
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": total_tokens,
+        },
+        cost_details={"total": cost},
+        metadata={
+            **(metadata or {}),
+            "provider": "openai",
+            "duration_ms": duration_ms,
+        },
+    )
+
+    return LLMResponse(
+        content=content,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        model=model,
+        duration_ms=duration_ms,
+        cost=cost,
+    )
+
+
+@observe(name="compare_models", as_type="span")
+def compare_models(
+    prompt: str,
+    user_id: str = "demo-user",
+    session_id: str | None = "demo-session",
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    """Compare Claude and OpenAI for the same prompt in one trace."""
+    trace_tags = tags or ["production-example", "model-comparison"]
+
+    # These attributes are applied to this trace and propagated to child
+    # generations so the run can be filtered by user, session, tags, and metadata.
+    with propagate_attributes(
+        user_id=user_id,
+        session_id=session_id,
+        tags=trace_tags,
+        metadata={"comparison": True},
+        trace_name="llm-model-comparison",
+    ):
+        claude_response = call_claude(
+            prompt,
+            metadata={"comparison_role": "candidate_a"},
+        )
+        openai_response = call_openai(
+            prompt,
+            metadata={"comparison_role": "candidate_b"},
+        )
+
+    total_cost = claude_response.cost + openai_response.cost
+    total_duration_ms = claude_response.duration_ms + openai_response.duration_ms
+
+    langfuse.update_current_span(
+        output={
+            "claude": asdict(claude_response),
+            "openai": asdict(openai_response),
+            "total_cost": total_cost,
+            "total_duration_ms": total_duration_ms,
+        },
+        metadata={
+            "comparison": True,
+            "total_cost": total_cost,
+            "total_duration_ms": total_duration_ms,
+        },
+    )
+
+    return {
+        "claude": claude_response,
+        "openai": openai_response,
+        "total_cost": total_cost,
+        "total_duration_ms": total_duration_ms,
+    }
+
+
+if __name__ == "__main__":
+    result = compare_models("Explain the theory of relativity in simple terms.")
+
+    print("Claude:", result["claude"].content)
+    print("OpenAI:", result["openai"].content)
+    print(f"Total cost: ${result['total_cost']:.6f}")
+    print(f"Total duration: {result['total_duration_ms']:.0f}ms")
+
+    # Always flush in scripts and notebooks so buffered observations are sent.
+    langfuse.flush()
+```
+
+![LLM Production Example](./assets/llm_production_example.png)
 
 ### RAG Pipeline
 
+Files:
+
+- [`lab/udemy-langfuse/rag_pipeline_obs.py`](./lab/udemy-langfuse/rag_pipeline_obs.py)
+- [`lab/04_langfuse_rag.ipynb`](./lab/04_langfuse_rag.ipynb)
+
+- Real applications are usually multi-step pipelines, not single LLM calls; RAG is a good example because it includes loading, chunking, embedding, retrieval, context assembly, and generation.
+- Each step is traced as its own Langfuse observation so latency, inputs, outputs, metadata, and errors can be inspected independently.
+- The indexing side loads Markdown files, splits them into chunks, embeds each chunk with `all-MiniLM-L6-v2`, and stores the vectors in a persistent ChromaDB collection.
+- The query side embeds the user query, retrieves the top matching chunks, builds a context string with source labels, and sends the query plus context to Claude.
+- Current Langfuse observation types make the trace easier to read:
+  - `span` for orchestration, loading, chunking, and context assembly.
+  - `embedding` for chunk and query embedding work.
+  - `retriever` for ChromaDB similarity search.
+  - `generation` for the final Claude call.
+- Retrieval metadata includes `top_k`, number of chunks retrieved, average distance, source paths, distance scores, and content previews.
+- Generation metadata includes the model, prompt/context length, input/output token counts, total tokens, and the generated answer.
+- In the Langfuse UI, the trace reveals where time is spent; generation is often the slowest and most expensive step.
+- Failed runs are useful too: Langfuse shows exceptions, missing outputs, and bad SDK arguments, making pipeline debugging much faster.
+- This observability makes it possible to tune retrieval quality, context size, latency, and cost instead of guessing.
+
+![RAG Example](./assets/rag_example.png)
+
+```python
+from pathlib import Path
+from typing import Any
+
+import anthropic
+import chromadb
+from dotenv import load_dotenv
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langfuse import get_client, observe, propagate_attributes
+from sentence_transformers import SentenceTransformer
+
+load_dotenv()
+  
+# Directories need to be changed, depending on noteebook/script location
+BASE_DIR = Path(".").resolve().parent
+DOCS_DIR = BASE_DIR / "lab" / "udemy-langfuse" / "docs"
+CHROMA_DIR = BASE_DIR / "lab" / "chroma_db"
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+GENERATION_MODEL = "claude-sonnet-4-20250514"
+
+# Langfuse reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, and LANGFUSE_BASE_URL.
+langfuse = get_client()
+
+# Chroma keeps the vector index on disk so indexing can be reused across runs.
+chroma = chromadb.PersistentClient(path=str(CHROMA_DIR))
+collection = chroma.get_or_create_collection(
+    name="documents",
+    metadata={"hnsw:space": "cosine"},
+)
+
+# Load the embedding model once. all-MiniLM-L6-v2 is small and returns 384 dims.
+embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+anthropic_client = anthropic.Anthropic()
+
+
+@observe(name="load_and_index_documents", as_type="span")
+def load_and_index_documents(docs_dir: str | Path = DOCS_DIR) -> int:
+    """Load, chunk, embed, and index Markdown documents."""
+    documents = load_markdown_docs(docs_dir)
+    if not documents:
+        langfuse.update_current_span(
+            output={"chunks_indexed": 0},
+            metadata={"reason": "no_documents"},
+        )
+        return 0
+
+    chunks = chunk_documents(documents)
+    chunks_indexed = index_chunks(chunks)
+
+    langfuse.update_current_span(
+        output={"chunks_indexed": chunks_indexed},
+        metadata={"docs_loaded": len(documents), "chunks_created": len(chunks)},
+    )
+    return chunks_indexed
+
+
+@observe(name="load_markdown_docs", as_type="span")
+def load_markdown_docs(docs_dir: str | Path) -> list[Document]:
+    """Load all Markdown files from a directory."""
+    docs_path = Path(docs_dir)
+    if not docs_path.exists():
+        raise FileNotFoundError(f"Docs directory not found: {docs_path}")
+
+    loader = DirectoryLoader(
+        str(docs_path),
+        glob="**/*.md",
+        loader_cls=TextLoader,
+        loader_kwargs={"encoding": "utf-8"},
+        show_progress=True,
+    )
+    documents = loader.load()
+
+    langfuse.update_current_span(
+        output={"documents_loaded": len(documents)},
+        metadata={"docs_dir": str(docs_path), "glob": "**/*.md"},
+    )
+    return documents
+
+
+@observe(name="chunk_documents", as_type="span")
+def chunk_documents(
+    documents: list[Document],
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200,
+) -> list[Document]:
+    """Split documents into retrieval-sized chunks."""
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
+    )
+    chunks = text_splitter.split_documents(documents)
+
+    langfuse.update_current_span(
+        output={"chunks": len(chunks)},
+        metadata={
+            "documents": len(documents),
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+        },
+    )
+    return chunks
+
+
+@observe(name="index_chunks", as_type="embedding")
+def index_chunks(chunks: list[Document]) -> int:
+    """Create embeddings and upsert chunks into ChromaDB."""
+    ids: list[str] = []
+    documents: list[str] = []
+    metadatas: list[dict[str, Any]] = []
+    embeddings: list[list[float]] = []
+
+    for index, chunk in enumerate(chunks):
+        chunk_id = f"chunk_{index}"
+        embedding = embedding_model.encode(chunk.page_content).tolist()
+
+        ids.append(chunk_id)
+        documents.append(chunk.page_content)
+        metadatas.append(
+            {
+                "source": chunk.metadata.get("source", "unknown"),
+                "chunk_index": index,
+            }
+        )
+        embeddings.append(embedding)
+
+    if ids:
+        collection.upsert(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+            embeddings=embeddings,
+        )
+
+    langfuse.update_current_span(
+        output={"chunks_indexed": len(ids)},
+        metadata={
+            "embedding_model": EMBEDDING_MODEL_NAME,
+            "embedding_dim": len(embeddings[0]) if embeddings else 0,
+            "collection": "documents",
+        },
+    )
+    return len(ids)
+
+
+@observe(name="rag_pipeline", as_type="span")
+def rag_pipeline(
+    query: str,
+    top_k: int = 5,
+    user_id: str = "demo-user",
+    session_id: str | None = "rag-demo-session",
+) -> str:
+    """Run the full RAG query pipeline in one trace."""
+    with propagate_attributes(
+        user_id=user_id,
+        session_id=session_id,
+        tags=["rag", "retrieval", "generation"],
+        metadata={"top_k": top_k, "embedding_model": EMBEDDING_MODEL_NAME},
+        trace_name="rag-query",
+    ):
+        query_embedding = embed_query(query)
+        chunks = retrieve_chunks(query_embedding, top_k=top_k)
+        context = build_context(chunks)
+        response = generate_response(query, context)
+
+    langfuse.update_current_span(
+        output={"response": response},
+        metadata={
+            "query": query,
+            "chunks_retrieved": len(chunks),
+            "context_length": len(context),
+        },
+    )
+    return response
+
+
+@observe(name="embed_query", as_type="embedding")
+def embed_query(query: str) -> list[float]:
+    """Embed the user query before vector search."""
+    embedding = embedding_model.encode(query).tolist()
+
+    langfuse.update_current_span(
+        output={"embedding_dim": len(embedding)},
+        metadata={"query_length": len(query), "embedding_model": EMBEDDING_MODEL_NAME},
+    )
+    return embedding
+
+
+@observe(name="retrieve_chunks", as_type="retriever")
+def retrieve_chunks(embedding: list[float], top_k: int = 5) -> list[dict[str, Any]]:
+    """Retrieve relevant document chunks from ChromaDB."""
+    results = collection.query(
+        query_embeddings=[embedding],
+        n_results=top_k,
+        include=["documents", "metadatas", "distances"],
+    )
+
+    chunks: list[dict[str, Any]] = []
+    documents = results.get("documents") or [[]]
+    metadatas = results.get("metadatas") or [[]]
+    distances = results.get("distances") or [[]]
+
+    for index, document in enumerate(documents[0]):
+        chunks.append(
+            {
+                "content": document,
+                "metadata": metadatas[0][index],
+                "distance": distances[0][index],
+            }
+        )
+
+    avg_distance = (
+        sum(chunk["distance"] for chunk in chunks) / len(chunks) if chunks else 0.0
+    )
+
+    langfuse.update_current_span(
+        output={
+            "chunks": [
+                {
+                    "source": chunk["metadata"].get("source", "unknown"),
+                    "distance": chunk["distance"],
+                    "content_preview": chunk["content"][:240],
+                }
+                for chunk in chunks
+            ]
+        },
+        metadata={
+            "chunks_retrieved": len(chunks),
+            "top_k": top_k,
+            "avg_distance": avg_distance,
+        },
+    )
+    return chunks
+
+
+@observe(name="build_context", as_type="span")
+def build_context(chunks: list[dict[str, Any]]) -> str:
+    """Assemble retrieved chunks into the context sent to the LLM."""
+    if not chunks:
+        context = "No relevant context found."
+    else:
+        context_parts = []
+        for index, chunk in enumerate(chunks, start=1):
+            source = chunk["metadata"].get("source", "unknown")
+            context_parts.append(f"[Source {index} - {source}]: {chunk['content']}")
+        context = "\n\n".join(context_parts)
+
+    langfuse.update_current_span(
+        output={"context_preview": context[:500]},
+        metadata={"context_length": len(context), "num_chunks_used": len(chunks)},
+    )
+    return context
+
+
+@observe(name="generate_response", as_type="generation")
+def generate_response(query: str, context: str) -> str:
+    """Generate an answer from the retrieved context using Claude."""
+    prompt = f"""Use the following context to answer the question.
+If the context doesn't contain relevant information, say so.
+
+Context:
+{context}
+
+Question: {query}
+
+Answer:"""
+
+    response = anthropic_client.messages.create(
+        model=GENERATION_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    answer = response.content[0].text
+
+    langfuse.update_current_generation(
+        model=GENERATION_MODEL,
+        input=[{"role": "user", "content": prompt}],
+        output=answer,
+        usage_details={
+            "input": response.usage.input_tokens,
+            "output": response.usage.output_tokens,
+            "total": response.usage.input_tokens + response.usage.output_tokens,
+        },
+        metadata={"prompt_length": len(prompt), "context_length": len(context)},
+    )
+    return answer
+
+
+if __name__ == "__main__":
+    print("Indexing documents from ./docs folder...")
+    try:
+        num_indexed = load_and_index_documents(DOCS_DIR)
+        print(f"Indexed {num_indexed} chunks")
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}")
+        print("Create a 'docs' folder with .md files first.")
+        raise SystemExit(1) from exc
+
+    print("\nQuerying RAG pipeline...")
+    result = rag_pipeline("What is LlamaIndex and how do I set it up?", top_k=5)
+    print(f"\nResponse:\n{result}")
+
+    # Always flush in scripts and notebooks so buffered observations are sent.
+    langfuse.flush()
+```
 
 ### LangChain Integration
+
+Files:
+
+- [`lab/udemy-langfuse/instrumentation_langchain.py`](./lab/udemy-langfuse/instrumentation_langchain.py)
+- [`lab/05_langfuse_langchain.ipynb`](./lab/05_langfuse_langchain.ipynb)
+
+Now, the good news is, if you're using, say, LangChain or LamaIndex, or you need any other
+
+integration out there, things are even easier with LangFuse, because they have a lot of
+
+wrapper classes.
+
+I'm going to show you.
+
+Let's say we are using LangChain.
+
+So I have this file here, instrumentation, LangChain, and we'll have access to all this
+
+code, of course.
+
+And what we'll do here is, let's go ahead and do quick imports.
+
+So from LangFuse, I'm going to go to LangChain, let's import the callback handler.
+
+So now we're going to, handler, set up the handler, LangFuse handler here, it's very simple.
+
+We just say, LangFuse handler, call the, and then initialize the object callback handler.
+
+The beauty here is that this is going to read credentials from environment variables, that's
+
+why we're always loading our environment variables.
+
+Use with any LangChain component.
+
+We can just say, for instance, we're going to go ahead and say from LangChain, let's
+
+say, Anthropic, as such, but for this, you actually have to, say, UV add LangChain Anthropic like this.
+
+And while we add it, let's add a few more.
+
+We need to add the open telemetry dash instrument, instrumentation, LangChain.
+
+I know it's a mouthful, but we need that, because that will have all the classes that
+
+we need to get this to work.
+
+The next we're going to also import LangChain core, I'm going to call, go to prompts, and
+
+let's import chat prompt templates.
+
+Okay, so this is going to facilitate our lives immensely here using these wrapper classes.
+
+So now we're ready to instantiate our large language model, we can just call the chat
+
+Anthropic as such, and this will be sonnet, there's no such thing as cloud two.
+
+And then if you hover over here, you can see that this also takes in a callback.
+
+Okay, so we can just go ahead and pass that callback handler there.
+
+And in this case, we pass as a list because we can pass as many callbacks as we want.
+
+So LangFuse handler, which is what we instantiated here.
+
+So this is going to be our handler for LangFuse callback.
+
+And verbose, we're going to say true.
+
+Okay, let's go ahead and create a prompt to be using and we're going to use the chat prompt
+
+template, say from template, and we're just going to go and pass what we want to pass.
+
+So I'm going to say explain a certain top, I can just concatenate as such, which is going
+
+to be the topic in simple terms like this.
+
+So that means then this will dynamically be added the topic.
+
+So the topic is about dogs, explain dogs in simple terms.
+
+Alright, so simply because of syntax changes, we can quickly just create a chain.
+
+So I'm going to say chain, and we're going to use this beautiful syntax here, we're passing
+
+the large language model, and then we create the chain with the prompt.
+
+So now the large launch model is going to be called, which is this one, chat anthropic,
+
+which we pass the callback, LangFuse handler, which is going to handle all that stuff.
+
+And then we pass the prompt and we should get bigger.
+
+So now let's go ahead and pass the handler so that all operations are traced.
+
+So I'm gonna say pass the handler and we log events.
+
+So I'm going to say put that in a variable response, I'm going to use the chain and the
+
+invoke method, which allows us to pass this whole dictionary here.
+
+So the topic has to be the same name as this, we can say quantum computing, we can say whatever we want.
+
+So let's start with that.
+
+And notice that we're also passing the callback here.
+
+Now one thing I think maybe this is overkill, if I do callback here, I don't need to pass it here.
+
+So either way, I think it works.
+
+So I'm going to just remove that.
+
+And we can keep verbose if you want, or maybe remove that altogether.
+
+That way, we just have a simple LLM, this makes more sense.
+
+And then when we invoke the chain, that's when we pass the callback. Okay.
+
+And of course, don't forget to actually flush so we can send this.
+
+So I'm going to also say from, let's go ahead and from LangFuse import LangFuse.
+
+So now we get that object.
+
+And let's go ahead and flush. Okay. That's it.
+
+And if I want, I can just go ahead and print a response. All right.
+
+So you can see it's very simple.
+
+We are using LangFuse.LangChain.
+
+So it has a callback wrapper, which we can use our long, we instantiate or initialize
+
+the LangFuse callback.
+
+And we do some imports here.
+
+Notice all of these are LangChain based, okay, chat, the chat prompt template, and the chat Anthropic.
+
+We instantiate the large language model by using the wrapper here, right?
+
+This is LangChain wrapper for Anthropic.
+
+They have also wrappers for OpenAI and many different models.
+
+We create the prompt, and then we create the chain, and then we invoke that chain.
+
+Essentially, we're going to run the chain, we pass the topic.
+
+So the topic is going to be quantum computing in this case, and not forgetting to pass the
+
+handler, the callback, the LangFuse handler callback here.
+
+And this is not going to work.
+
+What I'm going to do is from LangFuse, and we're going to import the GetClient object,
+
+and then we're going to use it, GetClient, and call the flush method.
+
+And everything should be good.
+
+We're passing the callback there, and good.
+
+Let's go check it out.
+
+So we can see the content that we got back, the explaining of the basic idea, think of
+
+regular computers, blah, blah, blah, very good.
+
+So now let's check to see if it is actually was saved in LangFuse, go to Tracings.
+
+So I noticed that I can't find the traces.
+
+I looked around and realized that this is actually a known bug that makes it difficult
+
+to actually send the traces to LangFuse using what we had before.
+
+So I fixed the code here real quick.
+
+So first of all, we actually have to initialize the OpenTelemetry
+
+instrumentation for a LangChain like this.
+
+Actually, we have to import it from OpenTelemetry instrumentation,
+
+LangChain, and import the actual class.
+
+And then we instantiate that LangChain instrumenter, that instrument. Okay.
+
+And then this is still the same.
+
+But now we're using the Observe decorator, actually.
+
+So we change a few things here.
+
+We call this RunLangChainExample.
+
+And then we pull all of the pieces that we had before.
+
+So now we're getting the LLM just like we had before.
+
+We create a prompt just like we had before.
+
+Nothing has changed, really.
+
+And then we created our chain.
+
+But then when we call the chain invoke and passing in the topic,
+
+and then quantum computing, we no longer have to pass
+
+the handler, the callback handler, because that is just something that doesn't work. Okay.
+
+And so this is actually using the OpenTelemetry instrumentation,
+
+which is going to capture everything automatically.
+
+Why? Because we instantiated it here.
+
+And we'll return that.
+
+And then we've run the LangChain method, which has all these things.
+
+And at the end, we say get client and flush. All right.
+
+Let's go ahead and see if this works.
+
+Okay.
+
+So it ran just like before.
+
+But now let's go here and refresh. Okay. There we go.
+
+So we can see RunLangChainExample. This is under.
+
+Let's go back to sessions and go back to traces.
+
+And we can see it ran.
+
+Let's pick one there. Voila.
+
+So the sum of all the costs. Okay.
+
+And the amount of time it took to run the example.
+
+So about eight seconds.
+
+Then we have the chat prompt here took only zero.
+
+And then the chat anthropic.
+
+This is the actual generation.
+
+You can see that a few things happen.
+
+We have eight seconds of latency.
+
+So it takes always more because we're actually inferring a large language model.
+
+And we have the 15 prompt, 375 completion.
+
+So 15 words in and out was 317. Okay. Tokens.
+
+The total 332, as you see here, the breakdown.
+
+And look at this.
+
+We have the user, the query, explain quantum computing in simple terms.
+
+And then we have the actual response.
+
+And one thing you notice, if I go to home, actually, let's go to dashboard.
+
+Because we've been running a lot of things in this organization, you can see it gives me
+
+all the overview for everything that has been happening in our dashboard.
+
+So you can see we can look at LangFuse cost, LangFuse usage management,
+
+LangFuse latency dashboard.
+
+Let's go to the dashboard.
+
+So we can see, look, we have the entire information about latency. Look at that.
+
+Latency by model tells us exactly all of that.
+
+So the more you use your applications, your LLM based applications are connected to LangFuse.
+
+All of that data is put here.
+
+And anybody in your team can go and look and see what's going on.
+
+So I can go to cost dashboard.
+
+And I can see, for instance, that total count of traces is two.
+
+OK, make it smaller so you can see everything there.
+
+So this is what it would see.
+
+Total cost, you can hover over, tells us the total cost and cost by model.
+
+We're just using one model, gives us their cost by environment. There we go.
+
+We can also see, in this case, top 10 users by cost.
+
+There's only one user and it shows here.
+
+Top 20 use cases. Look at it.
+
+So if we have different use cases, different users are using application.
+
+All of that is going to show here.
+
+The idea is that then you have access to all these pieces of information
+
+that will allow you and your organization to actually know
+
+exactly what to do or not to do, how your applications are performing. This is gold.
+
+Having this is going to save you a lot of money, a lot of headaches,
+
+and then you will know exactly how your LLM applications are performing.
 
