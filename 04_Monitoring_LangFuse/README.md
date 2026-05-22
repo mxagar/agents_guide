@@ -43,6 +43,13 @@ Table of Contents:
     - [LLM App for Production](#llm-app-for-production)
     - [RAG Pipeline](#rag-pipeline)
     - [LangChain Integration](#langchain-integration)
+  - [5. Cost Optimization Strategies](#5-cost-optimization-strategies)
+    - [Overview](#overview)
+    - [Prompt Optimization](#prompt-optimization)
+    - [Semantic Caching](#semantic-caching)
+    - [Smart Model Routing](#smart-model-routing)
+  - [6. Monitoring, Alerting, and Debugging](#6-monitoring-alerting-and-debugging)
+  - [7. Production Patterns and Security](#7-production-patterns-and-security)
 
 ## 1. Introduction to LangFuse
 
@@ -1540,7 +1547,7 @@ from langfuse import get_client, observe, propagate_attributes
 from sentence_transformers import SentenceTransformer
 
 load_dotenv()
-  
+
 # Directories need to be changed, depending on noteebook/script location
 BASE_DIR = Path(".").resolve().parent
 DOCS_DIR = BASE_DIR / "lab" / "udemy-langfuse" / "docs"
@@ -1841,323 +1848,119 @@ Files:
 - [`lab/udemy-langfuse/instrumentation_langchain.py`](./lab/udemy-langfuse/instrumentation_langchain.py)
 - [`lab/05_langfuse_langchain.ipynb`](./lab/05_langfuse_langchain.ipynb)
 
-Now, the good news is, if you're using, say, LangChain or LamaIndex, or you need any other
+- Langfuse can trace LangChain applications through a drop-in `CallbackHandler`.
+- The handler can be attached to any LangChain runnable through the `config={"callbacks": [...]}` argument at invocation time.
+- This is easier than manually instrumenting every LangChain component: chains, prompt steps, model calls, token usage, latency, metadata, tags, tools, and retrievers can be captured automatically.
+- The example uses LangChain Expression Language (LCEL): `prompt | llm`.
+- `ChatPromptTemplate` creates a reusable prompt with a dynamic `{topic}` variable.
+- `ChatAnthropic` calls Claude through LangChain; similar wrappers exist for OpenAI and other providers.
+- The code wraps the chain in `@observe(..., as_type="chain")` so the LangChain run sits inside a named parent observation.
+- `propagate_attributes(...)` adds `user_id`, `session_id`, tags, metadata, and trace name for filtering and analysis in Langfuse.
+- The helper `create_langfuse_handler(...)` supports both the current documented `langfuse_client=` constructor and installed SDK versions that only accept `trace_context=`.
+- In the Langfuse UI, the trace shows the parent chain, prompt formatting, Anthropic generation, latency, token usage, input prompt, model response, and cost dashboards by model/use case/user where available.
+- `langfuse.flush()` is required in notebooks and short-lived scripts so buffered observations are sent before the process exits.
+
+![LangChain Example](./assets/langchain_example.png)
+
+```python
+from inspect import signature
+from typing import Any
+
+from dotenv import load_dotenv
+from langchain_anthropic import ChatAnthropic
+from langchain_core.prompts import ChatPromptTemplate
+from langfuse import Langfuse, get_client, observe, propagate_attributes
+from langfuse.langchain import CallbackHandler
+
+load_dotenv()
+
+# Langfuse reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, and LANGFUSE_BASE_URL.
+langfuse = get_client()
+
+
+def create_langfuse_handler(trace_seed: str) -> CallbackHandler:
+    """Create a Langfuse LangChain callback handler.
+
+    Newer Langfuse SDK versions accept `langfuse_client=...`; some installed
+    versions accept only `trace_context=...`. This keeps the example compatible
+    while still using the current callback-based integration pattern.
+    """
+    trace_context = {"trace_id": Langfuse.create_trace_id(seed=trace_seed)}
+    handler_params = signature(CallbackHandler).parameters
+
+    if "langfuse_client" in handler_params:
+        return CallbackHandler(
+            langfuse_client=langfuse,
+            trace_context=trace_context,
+        )
+
+    return CallbackHandler(trace_context=trace_context)
+
+
+@observe(name="run_langchain_example", as_type="chain")
+def run_langchain_example(
+    topic: str = "quantum computing",
+    user_id: str = "demo-user",
+    session_id: str | None = "langchain-demo-session",
+) -> str:
+    """Run a LangChain LCEL chain and trace it with Langfuse."""
+    handler = create_langfuse_handler(trace_seed=f"langchain-{topic}")
+
+    # Trace-level attributes are propagated to the observed wrapper and child
+    # LangChain callback observations where supported by the SDK.
+    with propagate_attributes(
+        user_id=user_id,
+        session_id=session_id,
+        tags=["langchain", "callback-handler", "demo"],
+        metadata={"topic": topic, "framework": "langchain"},
+        trace_name="langchain-demo",
+    ):
+        # ChatAnthropic is the LangChain chat-model wrapper for Anthropic.
+        llm = ChatAnthropic(model="claude-sonnet-4-20250514")
+
+        # The prompt variable name must match the dict passed to chain.invoke().
+        prompt = ChatPromptTemplate.from_template(
+            "Explain {topic} in simple terms."
+        )
+        chain = prompt | llm
+
+        # Attach the Langfuse callback at invocation time. The callback captures
+        # the prompt step, model generation, token usage, latency, metadata, and tags.
+        response = chain.invoke(
+            {"topic": topic},
+            config={
+                "callbacks": [handler],
+                "metadata": {"use_case": "langchain_example"},
+                "tags": ["course", "langchain"],
+            },
+        )
+
+    langfuse.update_current_span(
+        output={"content": response.content},
+        metadata={"topic": topic},
+    )
+    return response.content
+
+
+if __name__ == "__main__":
+    answer = run_langchain_example("quantum computing")
+    print(answer)
+
+    # Always flush in scripts and notebooks so buffered observations are sent.
+    langfuse.flush()
+```
 
-integration out there, things are even easier with LangFuse, because they have a lot of
+## 5. Cost Optimization Strategies
 
-wrapper classes.
+### Overview
 
-I'm going to show you.
+### Prompt Optimization
 
-Let's say we are using LangChain.
+### Semantic Caching
 
-So I have this file here, instrumentation, LangChain, and we'll have access to all this
+### Smart Model Routing
 
-code, of course.
+## 6. Monitoring, Alerting, and Debugging
 
-And what we'll do here is, let's go ahead and do quick imports.
-
-So from LangFuse, I'm going to go to LangChain, let's import the callback handler.
-
-So now we're going to, handler, set up the handler, LangFuse handler here, it's very simple.
-
-We just say, LangFuse handler, call the, and then initialize the object callback handler.
-
-The beauty here is that this is going to read credentials from environment variables, that's
-
-why we're always loading our environment variables.
-
-Use with any LangChain component.
-
-We can just say, for instance, we're going to go ahead and say from LangChain, let's
-
-say, Anthropic, as such, but for this, you actually have to, say, UV add LangChain Anthropic like this.
-
-And while we add it, let's add a few more.
-
-We need to add the open telemetry dash instrument, instrumentation, LangChain.
-
-I know it's a mouthful, but we need that, because that will have all the classes that
-
-we need to get this to work.
-
-The next we're going to also import LangChain core, I'm going to call, go to prompts, and
-
-let's import chat prompt templates.
-
-Okay, so this is going to facilitate our lives immensely here using these wrapper classes.
-
-So now we're ready to instantiate our large language model, we can just call the chat
-
-Anthropic as such, and this will be sonnet, there's no such thing as cloud two.
-
-And then if you hover over here, you can see that this also takes in a callback.
-
-Okay, so we can just go ahead and pass that callback handler there.
-
-And in this case, we pass as a list because we can pass as many callbacks as we want.
-
-So LangFuse handler, which is what we instantiated here.
-
-So this is going to be our handler for LangFuse callback.
-
-And verbose, we're going to say true.
-
-Okay, let's go ahead and create a prompt to be using and we're going to use the chat prompt
-
-template, say from template, and we're just going to go and pass what we want to pass.
-
-So I'm going to say explain a certain top, I can just concatenate as such, which is going
-
-to be the topic in simple terms like this.
-
-So that means then this will dynamically be added the topic.
-
-So the topic is about dogs, explain dogs in simple terms.
-
-Alright, so simply because of syntax changes, we can quickly just create a chain.
-
-So I'm going to say chain, and we're going to use this beautiful syntax here, we're passing
-
-the large language model, and then we create the chain with the prompt.
-
-So now the large launch model is going to be called, which is this one, chat anthropic,
-
-which we pass the callback, LangFuse handler, which is going to handle all that stuff.
-
-And then we pass the prompt and we should get bigger.
-
-So now let's go ahead and pass the handler so that all operations are traced.
-
-So I'm gonna say pass the handler and we log events.
-
-So I'm going to say put that in a variable response, I'm going to use the chain and the
-
-invoke method, which allows us to pass this whole dictionary here.
-
-So the topic has to be the same name as this, we can say quantum computing, we can say whatever we want.
-
-So let's start with that.
-
-And notice that we're also passing the callback here.
-
-Now one thing I think maybe this is overkill, if I do callback here, I don't need to pass it here.
-
-So either way, I think it works.
-
-So I'm going to just remove that.
-
-And we can keep verbose if you want, or maybe remove that altogether.
-
-That way, we just have a simple LLM, this makes more sense.
-
-And then when we invoke the chain, that's when we pass the callback. Okay.
-
-And of course, don't forget to actually flush so we can send this.
-
-So I'm going to also say from, let's go ahead and from LangFuse import LangFuse.
-
-So now we get that object.
-
-And let's go ahead and flush. Okay. That's it.
-
-And if I want, I can just go ahead and print a response. All right.
-
-So you can see it's very simple.
-
-We are using LangFuse.LangChain.
-
-So it has a callback wrapper, which we can use our long, we instantiate or initialize
-
-the LangFuse callback.
-
-And we do some imports here.
-
-Notice all of these are LangChain based, okay, chat, the chat prompt template, and the chat Anthropic.
-
-We instantiate the large language model by using the wrapper here, right?
-
-This is LangChain wrapper for Anthropic.
-
-They have also wrappers for OpenAI and many different models.
-
-We create the prompt, and then we create the chain, and then we invoke that chain.
-
-Essentially, we're going to run the chain, we pass the topic.
-
-So the topic is going to be quantum computing in this case, and not forgetting to pass the
-
-handler, the callback, the LangFuse handler callback here.
-
-And this is not going to work.
-
-What I'm going to do is from LangFuse, and we're going to import the GetClient object,
-
-and then we're going to use it, GetClient, and call the flush method.
-
-And everything should be good.
-
-We're passing the callback there, and good.
-
-Let's go check it out.
-
-So we can see the content that we got back, the explaining of the basic idea, think of
-
-regular computers, blah, blah, blah, very good.
-
-So now let's check to see if it is actually was saved in LangFuse, go to Tracings.
-
-So I noticed that I can't find the traces.
-
-I looked around and realized that this is actually a known bug that makes it difficult
-
-to actually send the traces to LangFuse using what we had before.
-
-So I fixed the code here real quick.
-
-So first of all, we actually have to initialize the OpenTelemetry
-
-instrumentation for a LangChain like this.
-
-Actually, we have to import it from OpenTelemetry instrumentation,
-
-LangChain, and import the actual class.
-
-And then we instantiate that LangChain instrumenter, that instrument. Okay.
-
-And then this is still the same.
-
-But now we're using the Observe decorator, actually.
-
-So we change a few things here.
-
-We call this RunLangChainExample.
-
-And then we pull all of the pieces that we had before.
-
-So now we're getting the LLM just like we had before.
-
-We create a prompt just like we had before.
-
-Nothing has changed, really.
-
-And then we created our chain.
-
-But then when we call the chain invoke and passing in the topic,
-
-and then quantum computing, we no longer have to pass
-
-the handler, the callback handler, because that is just something that doesn't work. Okay.
-
-And so this is actually using the OpenTelemetry instrumentation,
-
-which is going to capture everything automatically.
-
-Why? Because we instantiated it here.
-
-And we'll return that.
-
-And then we've run the LangChain method, which has all these things.
-
-And at the end, we say get client and flush. All right.
-
-Let's go ahead and see if this works.
-
-Okay.
-
-So it ran just like before.
-
-But now let's go here and refresh. Okay. There we go.
-
-So we can see RunLangChainExample. This is under.
-
-Let's go back to sessions and go back to traces.
-
-And we can see it ran.
-
-Let's pick one there. Voila.
-
-So the sum of all the costs. Okay.
-
-And the amount of time it took to run the example.
-
-So about eight seconds.
-
-Then we have the chat prompt here took only zero.
-
-And then the chat anthropic.
-
-This is the actual generation.
-
-You can see that a few things happen.
-
-We have eight seconds of latency.
-
-So it takes always more because we're actually inferring a large language model.
-
-And we have the 15 prompt, 375 completion.
-
-So 15 words in and out was 317. Okay. Tokens.
-
-The total 332, as you see here, the breakdown.
-
-And look at this.
-
-We have the user, the query, explain quantum computing in simple terms.
-
-And then we have the actual response.
-
-And one thing you notice, if I go to home, actually, let's go to dashboard.
-
-Because we've been running a lot of things in this organization, you can see it gives me
-
-all the overview for everything that has been happening in our dashboard.
-
-So you can see we can look at LangFuse cost, LangFuse usage management,
-
-LangFuse latency dashboard.
-
-Let's go to the dashboard.
-
-So we can see, look, we have the entire information about latency. Look at that.
-
-Latency by model tells us exactly all of that.
-
-So the more you use your applications, your LLM based applications are connected to LangFuse.
-
-All of that data is put here.
-
-And anybody in your team can go and look and see what's going on.
-
-So I can go to cost dashboard.
-
-And I can see, for instance, that total count of traces is two.
-
-OK, make it smaller so you can see everything there.
-
-So this is what it would see.
-
-Total cost, you can hover over, tells us the total cost and cost by model.
-
-We're just using one model, gives us their cost by environment. There we go.
-
-We can also see, in this case, top 10 users by cost.
-
-There's only one user and it shows here.
-
-Top 20 use cases. Look at it.
-
-So if we have different use cases, different users are using application.
-
-All of that is going to show here.
-
-The idea is that then you have access to all these pieces of information
-
-that will allow you and your organization to actually know
-
-exactly what to do or not to do, how your applications are performing. This is gold.
-
-Having this is going to save you a lot of money, a lot of headaches,
-
-and then you will know exactly how your LLM applications are performing.
+## 7. Production Patterns and Security
 
