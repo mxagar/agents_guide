@@ -71,6 +71,12 @@ git clone https://github.com/langfuse/langfuse.git
 cd langfuse
 docker compose up
 # Access the LangFuse dashboard at http://localhost:3000
+
+# To stop without removing the data
+docker compose stop
+
+# To stop and remove the containers, networks, and volumes
+docker compose down
 ```
 
 Sometimes, some of the ports are taken, and we need to change them. For instance, in case the Postgres port is taken, we can change them in the `docker-compose.yml` file:
