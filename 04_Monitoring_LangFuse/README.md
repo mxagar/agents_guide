@@ -29,7 +29,13 @@ Table of Contents:
     - [Input and Output Tokens](#input-and-output-tokens)
     - [Where Costs Hide: RAG and Agentic Pipelines](#where-costs-hide-rag-and-agentic-pipelines)
     - [The Hidden Cost Multipliers](#the-hidden-cost-multipliers)
-  - [3. LangFuse as Obswervability Platform](#3-langfuse-as-obswervability-platform)
+  - [3. LangFuse as Observability Platform](#3-langfuse-as-observability-platform)
+    - [LLM Monitoring Platforms](#llm-monitoring-platforms)
+    - [Setting Up LangFuse on the Cloud](#setting-up-langfuse-on-the-cloud)
+    - [Creating First Trace with `@observe()`](#creating-first-trace-with-observe)
+      - [LangFuse Data Model](#langfuse-data-model)
+    - [First LLM Trace with LangFuse with OpenAI Wrapper](#first-llm-trace-with-langfuse-with-openai-wrapper)
+    - [LangFuse API Levels: Decorator, Context Manager, Low-Level, Drop-in](#langfuse-api-levels-decorator-context-manager-low-level-drop-in)
 
 ## 1. Introduction to LangFuse
 
@@ -687,5 +693,521 @@ def calculate_cost(
 - For complex reasoning, analysis, and creative tasks, route to stronger models that reliably produce better results.
 - Model selection is one of the highest-leverage LLM cost optimizations.
 
-## 3. LangFuse as Obswervability Platform
+## 3. LangFuse as Observability Platform
+
+### LLM Monitoring Platforms
+
+![LLM Monitoring Platforms](./assets/llm_monitoring_platforms.png)
+
+- There are many LLM observability tools, but teams usually only need to compare the main production-ready options.
+- Langfuse is recommended in this course because it is open source, self-hostable, vendor neutral, framework friendly, and has a clean UI, strong tracing, metrics, evaluations, and a generous free tier.
+- LangSmith is a strong choice for teams heavily invested in the LangChain ecosystem, but it is closed source.
+- Arize Phoenix is useful for ML and evaluation-focused teams, with both open-source and commercial options.
+- Helicone is especially useful when cost tracking is the primary concern.
+- Portkey is worth considering for systems that route across multiple LLM providers.
+- Platform choice depends on the team's needs:
+  - Heavy LangChain usage: LangSmith.
+  - Open source, self-hosting, and control: Langfuse.
+  - Cost tracking: Helicone.
+  - Multiple LLM providers: Portkey.
+- The course uses Langfuse, but the observability concepts should transfer to other platforms.
+
+### Setting Up LangFuse on the Cloud
+
+To see how set up your own managed LangFuse, check [Local Setup and Quick Start](#local-setup-and-quick-start) above.
+
+- Langfuse can be used through the managed cloud service or self-hosted with Docker.
+- The cloud option is the fastest path for the course because it requires no hosting, no infrastructure management, and no credit card for the free tier (50k traces/month).
+- Basic cloud setup:
+  - Sign up with email, Google, GitHub, or Azure AD.
+  - Create an organization.
+  - Create a project.
+  - Copy the project hostname/base URL.
+  - Create API keys.
+  - Add the Langfuse public key, secret key, and base URL to the project's `.env` file.
+- For local Python usage, install the Langfuse SDK and load environment variables with `python-dotenv`.
+- Instantiate a Langfuse client with the public key, secret key, and base URL from the environment.
+- The Langfuse project settings include API keys, LLM connections, models, score configurations, members, integrations, exports, batch actions, audit logs, notifications, and billing.
+- After setup, the next step is instrumenting a real application so traces and LLM activity appear in the dashboard.
+
+```bash
+LANGFUSE_SECRET_KEY="sk-lf-xxx"
+LANGFUSE_PUBLIC_KEY="pk-lf-xxx"
+LANGFUSE_BASE_URL="http://localhost:3000"
+```
+
+![LangFuse Project Settings](./assets/langfuse_project_settings.png)
+
+### Creating First Trace with `@observe()`
+
+- The new SDK pattern uses `@observe` and `get_client()` instead of manually instantiating a `LangFuse` object.
+- Environment variables still come from `.env`.
+- Running the script creates a first trace, flushes it to Langfuse, and lets you verify it in the dashboard under **Observability > Tracing**.
+- This same pattern can later be attached to real LLM calls for tracing, debugging, and cost monitoring.
+
+![LangFuse Observe Decorator](./assets/langfuse_observe_decorator.png)
+
+File: [`lab/udemy-langfuse/langf_obs.py`](./lab/udemy-langfuse/langf_obs.py)
+
+```python
+from langfuse import observe, get_client
+from dotenv import load_dotenv
+
+# Load LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, and LANGFUSE_BASE_URL
+# from the local .env file.
+load_dotenv()
+
+@observe
+def verify_connection():
+    # Nested observed functions appear as child observations inside the trace.
+    test_generation()
+
+    # Short-lived scripts and notebooks should flush before exiting so buffered
+    # traces are sent to Langfuse immediately.
+    client = get_client()
+    client.flush()
+
+    print("Connection to Langfuse is successful!")
+    print("check your dashboard at http://localhost:3000")
+
+@observe
+def test_generation():
+    """A simple test generation function to verify Langfuse connection."""
+
+    # The @observe decorator automatically logs this function call, including
+    # timing and return value, to Langfuse.
+    return "Hello, Langfuse!"
+
+if __name__ == "__main__":
+    # Run the observed function, then check the Langfuse dashboard.
+    verify_connection()
+    test_generation()
+```
+
+#### LangFuse Data Model
+
+- Langfuse organizes observability data hierarchically so complex LLM workflows can be inspected end to end.
+- Typical LLM workflows include retrieval, processing, generation, tool calls, and response handling.
+- Main hierarchy:
+  - **Session**: a group of related traces, such as one chat conversation.
+  - **Trace**: one request or operation inside a session, such as one user message to an LLM.
+  - **Observation**: one step inside a trace, such as retrieval, processing, generation, a tool call, or an event.
+
+![LangFuse Data Model Hierarchy](./assets/langfuse_data_model_hierarchy.png)
+
+- A trace is the container for everything that happens during a single request.
+- Example trace flow:
+  - User asks, "What's the weather like today?"
+  - The system receives the question.
+  - Retrieval or other context-building steps may run.
+  - The LLM call is made.
+  - The response is returned.
+- Important trace properties:
+  - `name`: identifies the operation.
+  - `input`: what went into the request.
+  - `output`: what came out.
+  - `user_id`: identifies who made the request.
+  - `session_id`: links the trace to its parent conversation/session.
+  - `tags`: labels used for filtering, grouping, and cost breakdowns.
+
+![LangFuse Data Model Traces](./assets/langfuse_data_model_traces.png)
+
+- Observation types:
+  - **Generation**: an LLM API call, including completions, token counts, model information, and calculated cost.
+  - **Span**: an operation with duration, such as database queries, retrieval steps, or processing logic.
+  - **Event**: a point-in-time occurrence, such as a cache hit or an error.
+- Observations can be nested hierarchically:
+  - A generation can have child spans.
+  - A span can have child events.
+
+![LangFuse Data Model Observations](./assets/langfuse_data_model_observations.png)
+
+- Sessions group related traces together.
+- Example session:
+  - One chat conversation with ID `ABC123`.
+  - A 10-message conversation can be represented as one session with 10 traces, one per message.
+- Sessions are useful because they show:
+  - Full conversation flow.
+  - User behavior patterns.
+  - How the LLM application behaves across multiple turns.
+  - Conversation-level metrics such as resolution rate and turns to completion.
+  - A/B test comparisons across different approaches.
+
+![LangFuse Data Model Sessions](./assets/langfuse_data_model_sessions.png)
+
+- Example end-to-end data flow:
+  - A user sends a message.
+  - Langfuse creates a trace with `session_id` and `user_id`.
+  - A retrieval span records its duration, for example `45 ms`.
+  - A generation records the LLM call, for example `150` input tokens, `50` output tokens, and the resulting cost.
+  - The trace is updated with final output and total latency, for example `850 ms`.
+
+![LangFuse Data Model: How It All Connects](./assets/langfuse_data_model.png)
+
+- Cost tracking happens at multiple levels:
+  - **Generation level**: cost per individual LLM call, based on token counts and model pricing.
+  - **Trace level**: total cost per request, aggregating all generations inside the trace.
+  - **Session level**: cost per conversation, useful for chat-based products.
+  - **Tag level**: cost by feature, user tier, experiment variant, or other labels.
+  - **User/group level**: identify the most expensive users, cohorts, tiers, or usage patterns.
+- This data model makes observability useful for debugging, performance analysis, user behavior analysis, A/B testing, and cost management.
+
+![LangFuse Data Model: Cost Management](./assets/langfuse_data_model_costs.png)
+
+
+### First LLM Trace with LangFuse with OpenAI Wrapper
+
+- This example creates a real OpenAI chat completion through the Langfuse OpenAI wrapper.
+- The wrapper keeps the familiar `chat.completions.create(...)` shape while automatically logging the LLM call as a Langfuse generation.
+- In the Langfuse UI, the trace appears with its timestamp, name, input, output, and total duration.
+- Opening the generation shows detailed observability data:
+  - Latency, for example around `1.xs` in the demo.
+  - Model used, here `gpt-4o-mini`.
+  - Token usage, including input tokens, output tokens, and total usage.
+  - Cost breakdown for input, cached input if applicable, and output.
+  - Captured system prompt, user message, assistant response, and custom metadata.
+- The metadata value `project: first_trace_llm_project` confirms that application-specific fields can be attached to traces for filtering and analysis.
+
+File: [`lab/udemy-langfuse/first_trace_llm.py`](./lab/udemy-langfuse/first_trace_llm.py).
+
+```python
+# Import the OpenAI-compatible client from Langfuse.
+# The API call looks like a normal OpenAI call, but Langfuse records the trace.
+from langfuse.openai import openai
+from dotenv import load_dotenv
+
+
+# Load OPENAI_API_KEY plus LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY,
+# and LANGFUSE_BASE_URL from .env.
+load_dotenv()
+
+completion = openai.chat.completions.create(
+    # This name appears in the Langfuse trace list.
+    name="first_trace_llm",
+    model="gpt-4o-mini",
+    messages=[
+        {
+            "role": "system",
+            # System prompt captured in the generation details.
+            "content": "You are a very accurate calculator. You output only the result of the calculation.",
+        },
+        # User message captured as the generation input.
+        {"role": "user", "content": "123 + 456 * 2 = "},
+    ],
+    # Custom metadata is stored with the trace and can be used for filtering.
+    metadata={"project": "first_trace_llm_project"},
+)
+
+# Print the assistant response locally; the same output is visible in Langfuse.
+print(completion.choices[0].message.content)
+
+```
+
+![LLM Generation Trace](./assets/llm_generation_trace.png)
+
+### LangFuse API Levels: Decorator, Context Manager, Low-Level, Drop-in
+
+![API Levels](./assets/api_levels.png)
+
+- Langfuse offers multiple API levels that can capture similar observability data with different amounts of control.
+- Main API levels:
+  - **Decorator-based**: use `@observe()` on functions; modern, simple, and usually the recommended default.
+  - **Context manager**: use `with` blocks to create traces, spans, and generations explicitly.
+  - **Low-level SDK**: manually create and update traces, spans, generations, scores, events, and other objects.
+  - **Drop-in wrappers**: use provider wrappers such as the Langfuse OpenAI wrapper so normal LLM calls are traced automatically.
+- The previous OpenAI wrapper example used the **drop-in** level: the code still calls `chat.completions.create(...)`, while Langfuse records traces in the background.
+- The first code block below demonstrates the **decorator-based** level:
+  - `@observe()` creates traces/spans automatically.
+  - Nested observed functions become nested spans.
+  - `update_current_span(...)` adds metadata and tags for filtering and grouping.
+  - `flush()` sends buffered observations before the script exits.
+- Context-manager tracing (2nd code block) is more explicit: use `with` blocks to name and structure spans/generations manually.
+- Low-level tracing provides (3rd code block) the most control but requires more code, including manually starting, updating, ending, and linking spans or generations.
+- Choose the API level based on how much automation vs. control the application needs.
+
+File: [`lab/udemy-langfuse/decorator_trace_llm.py`](./lab/udemy-langfuse/decorator_trace_llm.py)
+
+```python
+# Decorator-level API: use normal Python functions and annotate them with
+# @observe() so Langfuse creates traces/spans automatically.
+from langfuse import observe, Langfuse
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load OpenAI and Langfuse credentials from .env.
+load_dotenv()
+
+# Use the regular OpenAI client for the LLM call.
+client = OpenAI()
+
+# Langfuse client is used here to enrich the current span and flush data.
+langfuse = Langfuse()
+
+@observe()  # Creates a trace/span automatically.
+def calculator(expression: str) -> str:
+    """Single calculation - becomes a span when called from another @observe function."""
+    completion = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a very accurate calculator. You output only the result of the calculation.",
+            },
+            {"role": "user", "content": expression},
+        ],
+    )
+
+    # Add metadata and tags to the active span so it can be filtered in Langfuse.
+    # Other SDK helpers can update traces, spans, generations, prompts, scores,
+    # datasets, and events depending on what needs to be recorded.
+    langfuse.update_current_span(
+        metadata={"project": "decorator_example", "tags": ["calculator", "math"]},
+    )
+
+    return completion.choices[0].message.content
+
+
+@observe()  # Nested observed function = parent span with child spans.
+def process_calculations(expressions: list[str]) -> list[str]:
+    """Process multiple calculations - each calculator() call becomes a child span."""
+    results = []
+    for expr in expressions:
+        # Each calculator() call is captured as a child span under this trace.
+        result = calculator(expr)
+        results.append(f"{expr} = {result}")
+    return results
+
+
+if __name__ == "__main__":
+    # Running this creates one trace for the batch and child spans for each calculation.
+    expressions = ["123 + 456", "789 * 2", "100 / 4"]
+    results = process_calculations(expressions)
+
+    print("Results:")
+    for r in results:
+        print(f"  {r}")
+
+    # Flush is important for short-lived scripts so buffered observations are sent.
+    langfuse.flush()
+
+```
+
+![Decorator Trace](./assets/decorator_trace.png)
+
+File: [`lab/udemy-langfuse/context_manager_trace_llm.py`](./lab/udemy-langfuse/context_manager_trace_llm.py).
+
+```python
+# Context-manager API: explicitly open trace/span/generation scopes with
+# `with` blocks, while Langfuse manages the active current object.
+from langfuse import Langfuse
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load OpenAI and Langfuse credentials from .env.
+load_dotenv()
+
+# Regular OpenAI client performs the model call.
+client = OpenAI()
+
+# Langfuse client creates and updates the trace hierarchy.
+langfuse = Langfuse()
+
+expression = "123 + 456 * 2"
+
+# Create the root span. Because it is the outermost active span, it becomes
+# the root of a new trace in Langfuse.
+with langfuse.start_as_current_observation(
+    name="calculator_context_manager",
+    as_type="span",
+) as trace:
+
+    # Add a child span for preprocessing/validation work.
+    with langfuse.start_as_current_observation(
+        name="input_validation",
+        as_type="span",
+    ) as validation_span:
+        # Update the currently active span with input and output data.
+        langfuse.update_current_span(
+            input={"expression": expression},
+            output={"status": "valid"},
+        )
+
+    # Add a generation for the actual LLM call. Generations are the right
+    # Langfuse object for model requests because they track model, tokens, and cost.
+    with langfuse.start_as_current_observation(
+        name="llm_calculation",
+        as_type="generation",
+        model="gpt-4o-mini",
+        input=[
+            {
+                "role": "system",
+                "content": "You are a very accurate calculator. You output only the result of the calculation.",
+            },
+            {"role": "user", "content": expression},
+        ],
+    ) as generation:
+        # The OpenAI call itself still uses the regular OpenAI SDK.
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a very accurate calculator. You output only the result of the calculation.",
+                },
+                {"role": "user", "content": expression},
+            ],
+        )
+        result = completion.choices[0].message.content
+
+        # Attach the LLM output, token usage, and metadata to the active generation.
+        langfuse.update_current_generation(
+            output=result,
+            usage_details={
+                "input": completion.usage.prompt_tokens,
+                "output": completion.usage.completion_tokens,
+            },
+            metadata={"project": "context_manager_example"},
+        )
+
+    # Attach final request-level output and tags to the root span.
+    trace.update(
+        output={"result": result},
+        tags=["calculator", "context_manager"],
+    )
+
+print(f"{expression} = {result}")
+
+# Flush is important for short-lived scripts so buffered observations are sent.
+langfuse.flush()
+```
+
+File: [`lab/udemy-langfuse/low_level_trace_llm.py`](./lab/udemy-langfuse/low_level_trace_llm.py).
+
+```python
+# Low-level API: manually create, update, end, and link Langfuse objects.
+# This gives maximum control, but requires more lifecycle code.
+from langfuse import Langfuse
+from openai import OpenAI
+from dotenv import load_dotenv
+import time
+
+# Load OpenAI and Langfuse credentials from .env.
+load_dotenv()
+
+# Regular OpenAI client performs the model call.
+client = OpenAI()
+
+# Langfuse client is used directly to create spans, generations, scores, and events.
+langfuse = Langfuse()
+
+expression = "123 + 456 * 2"
+
+# Create the root span. Starting a root span creates a new trace automatically.
+root_span = langfuse.start_observation(
+    name="calculator_low_level",
+    as_type="span",
+    input={"expression": expression},
+    metadata={"project": "low_level_example"},
+)
+
+# Keep the trace ID so later objects, such as scores, can be attached to this trace.
+trace_id = root_span.trace_id
+
+# Create and manually finish a child span for preprocessing/validation.
+preprocessing_span = root_span.start_observation(
+    name="preprocessing",
+    as_type="span",
+    input={"raw_expression": expression},
+)
+
+# Update the child span with the validation result.
+preprocessing_span.update(
+    output={"validated_expression": expression, "status": "valid"},
+)
+
+# Low-level spans must be ended explicitly.
+preprocessing_span.end()
+
+# Track custom timing around the model call.
+start_time = time.time()
+
+# The LLM request itself is still a normal OpenAI SDK call.
+completion = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {
+            "role": "system",
+            "content": "You are a very accurate calculator. You output only the result of the calculation.",
+        },
+        {"role": "user", "content": expression},
+    ],
+)
+
+end_time = time.time()
+result = completion.choices[0].message.content
+
+# Create the generation manually as another child observation so we can control
+# its name, model, parameters, input, output, usage, status, and lifecycle.
+generation = root_span.start_observation(
+    name="llm_calculation",
+    as_type="generation",
+    model="gpt-4o-mini",
+    model_parameters={"temperature": 1.0},
+    input=[
+        {
+            "role": "system",
+            "content": "You are a very accurate calculator. You output only the result of the calculation.",
+        },
+        {"role": "user", "content": expression},
+    ],
+)
+
+# Update the generation with output, token usage, severity level, and status.
+generation.update(
+    output=result,
+    usage_details={
+        "input": completion.usage.prompt_tokens,
+        "output": completion.usage.completion_tokens,
+        "total": completion.usage.total_tokens,
+    },
+    level="DEFAULT",  # Options: "DEBUG", "DEFAULT", "WARNING", "ERROR"
+    status_message="Calculation completed successfully",
+)
+
+# Low-level generations must also be ended explicitly.
+generation.end()
+
+# Update and end the root span with final request-level output and custom timing.
+root_span.update(
+    output={"result": result},
+    metadata={"duration_ms": (end_time - start_time) * 1000},
+)
+root_span.end()
+
+# Attach an evaluation score to the trace.
+langfuse.create_score(
+    trace_id=trace_id,
+    name="accuracy",
+    value=1.0,
+    comment="Correct calculation verified",
+)
+
+# Create a point-in-time event for debugging or audit-style logging.
+event = langfuse.create_event(
+    name="calculation_complete",
+    trace_context={"trace_id": trace_id},
+    input={"expression": expression},
+    output={"result": result},
+    metadata={"duration_ms": (end_time - start_time) * 1000},
+)
+
+print(f"{expression} = {result}")
+print(f"Duration: {(end_time - start_time) * 1000:.2f}ms")
+print(f"Tokens used: {completion.usage.total_tokens}")
+print(f"Trace ID: {trace_id}")
+
+# Flush is important for short-lived scripts so buffered observations are sent.
+langfuse.flush()
+
+```
 
